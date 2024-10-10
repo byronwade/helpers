@@ -77,7 +77,7 @@ Format the commit message as follows:
 Ensure the message is professional and focuses on the nature of the changes, not the quantity."""
 
     payload = {
-        "model": "llama2",
+        "model": "codellama",
         "prompt": prompt,
         "stream": False
     }
