@@ -54,21 +54,19 @@ import sys
 import requests
 import json
 import time
-import re
+import subprocess
 
-def parse_git_diff(diff):
-    files_changed = re.findall(r'(\w+)\s+(.+)', diff)
-    return files_changed
+def get_detailed_changes():
+    try:
+        diff_output = subprocess.check_output(['git', 'diff', '--cached', '--stat'], universal_newlines=True)
+        detailed_output = subprocess.check_output(['git', 'diff', '--cached'], universal_newlines=True)
+        return diff_output, detailed_output
+    except subprocess.CalledProcessError:
+        return "", ""
 
-changes = sys.stdin.read()
-files_changed = parse_git_diff(changes)
+diff_summary, detailed_changes = get_detailed_changes()
 
-summary = f"Changed {len(files_changed)} file(s): "
-summary += ", ".join([f"{action} {file}" for action, file in files_changed[:3]])
-if len(files_changed) > 3:
-    summary += f" and {len(files_changed) - 3} more"
-
-prompt = f"Based on the following git changes, write a concise and meaningful commit message (max 50 characters, no quotes):\n\n{summary}\n\nCommit message:"
+prompt = f"Based on the following git changes, write a concise and accurate commit message (max 50 characters, no quotes):\n\nSummary:\n{diff_summary}\n\nDetailed changes:\n{detailed_changes[:500]}...\n\nCommit message:"
 
 payload = {
     "model": "tinyllama",
@@ -81,7 +79,7 @@ try:
     response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=30)
     response.raise_for_status()
     commit_message = response.json()['response'].strip()
-    commit_message = commit_message[:50].rstrip()  # Ensure the message is no longer than 50 characters and remove trailing spaces
+    commit_message = commit_message[:50].rstrip()
     end_time = time.time()
     print(json.dumps({"summary": commit_message, "time": end_time - start_time}))
 except Exception as e:
@@ -92,8 +90,16 @@ except Exception as e:
 # Write the Python script to the temporary file
 $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
-# Execute the Python script
-$result = $changes | python $pythonScriptPath | ConvertFrom-Json
+# Execute the Python script with a spinner
+$job = Start-Job -ScriptBlock { 
+    param($pythonScriptPath)
+    & python $pythonScriptPath
+} -ArgumentList $pythonScriptPath
+
+Show-Spinner -Duration 30
+
+$result = Receive-Job -Job $job -Wait | ConvertFrom-Json
+Remove-Job -Job $job
 
 # Remove temporary file
 Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
@@ -107,8 +113,6 @@ $summary = $result.summary
 $processingTime = [math]::Round($result.time, 2)
 
 Write-Host "Commit message generated in $processingTime seconds."
-Write-Host "Summary of changes:"
-git diff --cached --stat
 Write-Host "Generated commit message: $summary"
 
 Write-Host "Committing changes..."
