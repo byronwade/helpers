@@ -8,7 +8,7 @@ $OllamaAPIURL = if ($env:OLLAMA_API_URL) { $env:OLLAMA_API_URL } else { "http://
 function Ensure-OllamaRunning {
     if (!(Get-NetTCPConnection -LocalPort 11434 -ErrorAction SilentlyContinue)) {
         Write-Host "Ollama is not running. Starting Ollama service..."
-        Start-Process ollama -ArgumentList "serve" -NoNewWindow
+        Start-Process ollama -ArgumentList "serve" -NoNewWindow -RedirectStandardOutput $null -RedirectStandardError $null
         Start-Sleep -Seconds 5  # Wait for Ollama to start
     } else {
         Write-Host "Ollama service is already running."
@@ -108,7 +108,7 @@ $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 # Execute the Python script with a spinner
 $job = Start-Job -ScriptBlock { 
     param($pythonScriptPath, $changes, $userName)
-    $changes | python $pythonScriptPath $userName
+    $changes | python $pythonScriptPath $userName 2>$null
 } -ArgumentList $pythonScriptPath, $changes, $userName
 
 Show-Spinner -Duration 40  # Increased duration to account for retries

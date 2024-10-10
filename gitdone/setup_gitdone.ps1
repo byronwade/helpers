@@ -4,7 +4,7 @@ $CurrentDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 # Variables
 $ScriptPath = Join-Path $CurrentDir "gitdone.ps1"
 $OllamaAPIURL = "http://localhost:11434"
-$ModelName = "llama2"
+$ModelName = "codellama"
 
 # Ensure the gitdone.ps1 script exists in the current directory
 if (!(Test-Path $ScriptPath)) {
