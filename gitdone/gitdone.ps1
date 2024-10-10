@@ -56,21 +56,21 @@ import json
 import time
 
 changes = sys.stdin.read()
-prompt = f"""Based on the following git changes, create a concise commit message that focuses on the specific code changes made, not just file statistics. For example, mention API call reductions, code simplifications, or specific feature implementations:
+prompt = f"""Based on the following git changes, create a concise commit message that focuses on the specific code changes made, not just file statistics. Mention API call reductions, code simplifications, or specific feature implementations:
 
 {changes}
 
 Commit message:"""
 
 payload = {
-    "model": "tinyllama",
+    "model": "llama2",
     "prompt": prompt,
     "stream": False
 }
 
 try:
     start_time = time.time()
-    response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=10)
+    response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=20)
     response.raise_for_status()
     summary = response.json()['response'].strip().replace('"', '').replace('\n', ' ')
     end_time = time.time()
@@ -89,7 +89,7 @@ $job = Start-Job -ScriptBlock {
     $changes | python $pythonScriptPath
 } -ArgumentList $pythonScriptPath, $changes
 
-Show-Spinner -Duration 10
+Show-Spinner -Duration 20
 
 $result = Receive-Job -Job $job -Wait | ConvertFrom-Json
 Remove-Job -Job $job
