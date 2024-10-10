@@ -15,7 +15,7 @@ function Ensure-OllamaRunning {
         Write-Host "Ollama service is already running."
     }
 
-    $modelName = "llama2"
+    $modelName = "orca-mini"
     if (!(ollama list | Select-String $modelName)) {
         Write-Host "Pulling the latest $modelName model..."
         ollama pull $modelName
@@ -48,8 +48,9 @@ $pythonScriptPath = [System.IO.Path]::GetTempFileName() + ".py"
 $pythonScript = @"
 import sys
 import json
-import requests
 import logging
+from ollama import Client
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 logging.basicConfig(filename='gitdone_debug.log', level=logging.DEBUG)
 logging.debug("Python script started")
@@ -60,28 +61,22 @@ print(f"Ollama API URL: {sys.argv[1]}")
 diff = sys.stdin.read()
 logging.debug(f"Received diff of length: {len(diff)}")
 
-payload = {
-    "model": "llama2",
-    "prompt": f"Summarize the following git diff in a concise commit message:\n\n{diff}",
-    "stream": False
-}
+client = Client(host=sys.argv[1])
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def generate_summary(prompt):
+    try:
+        response = client.generate(model="orca-mini", prompt=prompt)
+        return response['response'].strip()
+    except Exception as e:
+        logging.error(f"Error generating summary: {str(e)}")
+        raise
 
 try:
-    logging.debug("Sending request to Ollama API")
-    response = requests.post(sys.argv[1] + "/api/generate", json=payload, timeout=120)
-    logging.debug(f"Response status code: {response.status_code}")
-    response.raise_for_status()
-    summary = response.json().get('response', '').strip()
+    prompt = f"Summarize the following git diff in a concise commit message:\n\n{diff}"
+    summary = generate_summary(prompt)
     logging.debug(f"Generated summary: {summary}")
     print(summary)
-except requests.exceptions.Timeout:
-    logging.error("Request to Ollama API timed out")
-    print("Request to Ollama API timed out")
-    sys.exit(1)
-except requests.exceptions.RequestException as e:
-    logging.error(f"Request failed: {str(e)}")
-    print(f"Request failed: {str(e)}")
-    sys.exit(1)
 except Exception as e:
     logging.exception("An unexpected error occurred:")
     print(f"An unexpected error occurred: {str(e)}")
