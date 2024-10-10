@@ -24,6 +24,7 @@ function Ensure-OllamaRunning {
 # Ensure Ollama is running and the model is available
 Ensure-OllamaRunning
 
+Write-Host "Checking for changes..."
 # Get git diff to summarize
 $changes = git diff --cached
 
@@ -33,9 +34,13 @@ if ([string]::IsNullOrEmpty($changes)) {
     exit 0
 }
 
+Write-Host "Changes detected. Preparing to summarize..."
+
 # Write diff to temporary file
 $tempFile = [System.IO.Path]::GetTempFileName()
 $changes | Out-File -FilePath $tempFile -Encoding utf8
+
+Write-Host "Diff written to temporary file. Preparing Python script..."
 
 # Create a temporary Python script file
 $pythonScriptPath = [System.IO.Path]::GetTempFileName() + ".py"
@@ -43,12 +48,16 @@ $pythonScript = @"
 import sys
 import json
 import requests
+import logging
+
+logging.basicConfig(filename='gitdone_debug.log', level=logging.DEBUG)
+logging.debug("Python script started")
 
 print("Python script started")
 print(f"Ollama API URL: {sys.argv[1]}")
 
 diff = sys.stdin.read()
-print(f"Received diff of length: {len(diff)}")
+logging.debug(f"Received diff of length: {len(diff)}")
 
 payload = {
     "model": "llama3.1",
@@ -57,28 +66,34 @@ payload = {
 }
 
 try:
+    logging.debug("Sending request to Ollama API")
     response = requests.post(sys.argv[1] + "/api/generate", json=payload, timeout=30)
     response.raise_for_status()
     summary = response.json().get('response', '').strip()
-    print(f"Generated summary: {summary}")
+    logging.debug(f"Generated summary: {summary}")
+    print(summary)
 except requests.exceptions.Timeout:
+    logging.error("Request to Ollama API timed out")
     print("Request to Ollama API timed out")
     sys.exit(1)
 except Exception as e:
+    logging.exception("An error occurred:")
     print(f"Error occurred: {str(e)}")
     sys.exit(1)
-
-print(summary)
 "@
 
+Write-Host "Writing Python script to temporary file..."
 # Write the Python script to the temporary file
 $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
+Write-Host "Executing Python script..."
 # Execute the Python script and capture the output
-$summary = Get-Content $tempFile | python -c "$pythonScript" $OllamaAPIURL 2>&1
+$summary = Get-Content $tempFile | python $pythonScriptPath $OllamaAPIURL 2>&1
 
-# Remove temporary Python script file
+Write-Host "Python script execution completed. Cleaning up temporary files..."
+# Remove temporary files
 Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
+Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
 
 if (-not $summary) {
     Write-Host "Failed to generate commit summary." -ForegroundColor Red
@@ -87,12 +102,11 @@ if (-not $summary) {
 
 Write-Host "Generated commit summary: $summary" -ForegroundColor Green
 
-# Remove temporary diff file
-Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
-
+Write-Host "Committing changes..."
 # Commit changes
 git commit -m "$summary"
 
+Write-Host "Pushing to origin main..."
 # Push to origin main
 git push origin main
 
