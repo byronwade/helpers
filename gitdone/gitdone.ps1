@@ -93,10 +93,39 @@ Write-Host "Writing Python script to temporary file..."
 $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
 Write-Host "Executing Python script..."
-# Execute the Python script and capture the output
-$summary = Get-Content $tempFile | python $pythonScriptPath $OllamaAPIURL 2>&1
 
-Write-Host "Python script execution completed. Cleaning up temporary files..."
+# Start time
+$startTime = Get-Date
+
+# Create a job to run the Python script
+$job = Start-Job -ScriptBlock {
+    param($tempFile, $pythonScriptPath, $OllamaAPIURL)
+    Get-Content $tempFile | python $pythonScriptPath $OllamaAPIURL 2>&1
+} -ArgumentList $tempFile, $pythonScriptPath, $OllamaAPIURL
+
+# Spinner animation
+$spinner = @('|', '/', '-', '\')
+$spinnerIndex = 0
+
+# Display spinner while job is running
+while ($job.State -eq 'Running') {
+    $elapsedTime = (Get-Date) - $startTime
+    $status = "Processing{0} Elapsed time: {1:mm\:ss}" -f $spinner[$spinnerIndex], $elapsedTime
+    Write-Host "`r$status" -NoNewline
+    $spinnerIndex = ($spinnerIndex + 1) % 4
+    Start-Sleep -Milliseconds 100
+}
+
+# Clear the spinner line
+Write-Host "`r" -NoNewline
+
+# Get the result
+$summary = Receive-Job -Job $job
+Remove-Job -Job $job
+
+$elapsedTime = (Get-Date) - $startTime
+Write-Host "Python script execution completed in $($elapsedTime.TotalSeconds.ToString("F2")) seconds. Cleaning up temporary files..."
+
 # Remove temporary files
 Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
 Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
