@@ -60,31 +60,21 @@ import time
 import random
 
 def generate_commit_message(changes, user_name, max_retries=3):
-    prompt = f"""You are a highly skilled developer and commit message generator. You will generate detailed, structured, and readable commit messages for the provided git diff. Each commit message should:
+    prompt = f"""You are a highly skilled developer and commit message generator. Generate a concise, professional commit message for the provided git diff. The message should:
 
-    1. Begin with the current authorized user's name, in this case: {user_name}.
-    2. Clearly state the files changed.
-    3. Summarize the types of changes made in each file (e.g., added functionality, refactored code, removed redundancy, etc.).
-    4. Provide specific details of the changes (e.g., added authentication, fixed syntax errors, improved comments).
-    5. Ensure the message is concise, professional, and easy to understand.
+1. Begin with the current authorized user's name: {user_name}.
+2. Clearly state the files changed.
+3. Briefly summarize the types of changes made in each file (e.g., added functionality, refactored code, fixed bugs).
+4. Be concise and easy to understand.
+5. Do NOT include any statistics or line numbers.
 
-    Here is the git diff for which I need a commit message:
+Format the commit message as follows:
 
-    {changes}
+{user_name} made changes in:
+- [filename]: [brief description of changes]
+- [filename]: [brief description of changes]
 
-    Now generate a commit message structured as follows:
-
-    {user_name} made changes in:
-    - [file1]
-      - [brief change description 1]
-      - [brief change description 2]
-      - [brief change description 3]
-    - [file2]
-      - [brief change description 1]
-      - [brief change description 2]
-      - [brief change description 3]
-
-    Ensure the message is structured professionally, with appropriate detail and clarity."""
+Ensure the message is professional and focuses on the nature of the changes, not the quantity."""
 
     payload = {
         "model": "llama2",
