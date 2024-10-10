@@ -37,50 +37,58 @@ if ([string]::IsNullOrEmpty($changes)) {
 $tempFile = [System.IO.Path]::GetTempFileName()
 $changes | Out-File -FilePath $tempFile -Encoding utf8
 
-# Escape backslashes in the file path
-$escapedTempFile = $tempFile -replace '\\', '\\'
-
-# Call Ollama API to summarize changes
-$summary = python -c @"
-import os
-import requests
-import json
+# Create a temporary Python script file
+$pythonScriptPath = [System.IO.Path]::GetTempFileName() + ".py"
+$pythonScript = @"
 import sys
+import json
+import requests
 
-ollama_api_url = '$OllamaAPIURL'
-temp_file = r'$escapedTempFile'
+print("Python script started")
+print(f"Ollama API URL: {sys.argv[1]}")
 
-with open(temp_file, 'r', encoding='utf-8') as f:
-    diff = f.read()
-
-print("Diff content:", diff[:100] + "...")  # Debug print (first 100 characters)
+diff = sys.stdin.read()
+print(f"Received diff of length: {len(diff)}")
 
 payload = {
     "model": "llama3.1",
-    "prompt": "Summarize the following git diff in a concise commit message:\n\n" + diff,
+    "prompt": f"Summarize the following git diff in a concise commit message:\n\n{diff}",
     "stream": False
 }
 
 try:
-    response = requests.post(f"{ollama_api_url}/api/generate", json=payload)
-    response_json = response.json()
-    summary = response_json['response'].strip()
-    print(summary)
-except Exception as e:
-    print(f"Error: {str(e)}", file=sys.stderr)
+    response = requests.post(sys.argv[1] + "/api/generate", json=payload, timeout=30)
+    response.raise_for_status()
+    summary = response.json().get('response', '').strip()
+    print(f"Generated summary: {summary}")
+except requests.exceptions.Timeout:
+    print("Request to Ollama API timed out")
     sys.exit(1)
-finally:
-    os.remove(temp_file)
+except Exception as e:
+    print(f"Error occurred: {str(e)}")
+    sys.exit(1)
+
+print(summary)
 "@
 
-# Remove temporary file
-Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
+# Write the Python script to the temporary file
+$pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
-# If no summary is generated
+# Execute the Python script and capture the output
+$summary = Get-Content $tempFile | python -c $pythonScript $OllamaAPIURL 2>&1
+
+# Remove temporary Python script file
+Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
+
 if (-not $summary) {
-    Write-Host "Failed to generate commit summary."
+    Write-Host "Failed to generate commit summary." -ForegroundColor Red
     exit 1
 }
+
+Write-Host "Generated commit summary: $summary" -ForegroundColor Green
+
+# Remove temporary diff file
+Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
 
 # Commit changes
 git commit -m "$summary"
@@ -89,4 +97,4 @@ git commit -m "$summary"
 git push origin main
 
 # Print success message
-Write-Host "Changes committed and pushed with summary: $summary"
+Write-Host "Changes committed and pushed with summary: $summary" -ForegroundColor Green
