@@ -4,30 +4,22 @@ git add .
 # Check for environment variable for Ollama API URL
 $OllamaAPIURL = if ($env:OLLAMA_API_URL) { $env:OLLAMA_API_URL } else { "http://localhost:11434" }
 
-# Function to ensure Ollama is running and the model is available
+# Function to ensure Ollama is running
 function Ensure-OllamaRunning {
-    Write-Host "Checking Ollama service..."
     if (!(Get-NetTCPConnection -LocalPort 11434 -ErrorAction SilentlyContinue)) {
         Write-Host "Ollama is not running. Starting Ollama service..."
         Start-Process ollama -ArgumentList "serve" -NoNewWindow
-        Start-Sleep -Seconds 10  # Wait for Ollama to start
+        Start-Sleep -Seconds 5  # Wait for Ollama to start
     } else {
         Write-Host "Ollama service is already running."
     }
-
-    $modelName = "orca-mini"
-    if (!(ollama list | Select-String $modelName)) {
-        Write-Host "Pulling the latest $modelName model..."
-        ollama pull $modelName
-    }
 }
 
-# Ensure Ollama is running and the model is available
+# Ensure Ollama is running
 Ensure-OllamaRunning
 
-Write-Host "Checking for changes..."
 # Get git diff to summarize
-$changes = git diff --cached
+$changes = git diff --cached --stat
 
 # Check if there are any changes staged
 if ([string]::IsNullOrEmpty($changes)) {
@@ -35,110 +27,52 @@ if ([string]::IsNullOrEmpty($changes)) {
     exit 0
 }
 
-Write-Host "Changes detected. Preparing to summarize..."
-
-# Write diff to temporary file
-$tempFile = [System.IO.Path]::GetTempFileName()
-$changes | Out-File -FilePath $tempFile -Encoding utf8
-
-Write-Host "Diff written to temporary file. Preparing Python script..."
+Write-Host "Generating commit message..."
 
 # Create a temporary Python script file
 $pythonScriptPath = [System.IO.Path]::GetTempFileName() + ".py"
 $pythonScript = @"
 import sys
+import requests
 import json
-import logging
-from ollama import Client
-from tenacity import retry, stop_after_attempt, wait_fixed
 
-logging.basicConfig(filename='gitdone_debug.log', level=logging.DEBUG)
-logging.debug("Python script started")
+changes = sys.stdin.read()
+prompt = f"Summarize the following git changes in a concise commit message (max 50 characters):\n\n{changes}"
 
-print("Python script started")
-print(f"Ollama API URL: {sys.argv[1]}")
-
-diff = sys.stdin.read()
-logging.debug(f"Received diff of length: {len(diff)}")
-
-client = Client(host=sys.argv[1])
-
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def generate_summary(prompt):
-    try:
-        response = client.generate(model="orca-mini", prompt=prompt)
-        return response['response'].strip()
-    except Exception as e:
-        logging.error(f"Error generating summary: {str(e)}")
-        raise
+payload = {
+    "model": "tinyllama",
+    "prompt": prompt,
+    "stream": False
+}
 
 try:
-    prompt = f"Summarize the following git diff in a concise commit message:\n\n{diff}"
-    summary = generate_summary(prompt)
-    logging.debug(f"Generated summary: {summary}")
+    response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=30)
+    response.raise_for_status()
+    summary = response.json()['response'].strip()
     print(summary)
 except Exception as e:
-    logging.exception("An unexpected error occurred:")
-    print(f"An unexpected error occurred: {str(e)}")
+    print(f"Error: {str(e)}")
     sys.exit(1)
 "@
 
-Write-Host "Writing Python script to temporary file..."
 # Write the Python script to the temporary file
 $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
-Write-Host "Executing Python script..."
+# Execute the Python script
+$summary = $changes | python $pythonScriptPath
 
-# Start time
-$startTime = Get-Date
-
-# Create a job to run the Python script
-$job = Start-Job -ScriptBlock {
-    param($tempFile, $pythonScriptPath, $OllamaAPIURL)
-    Get-Content $tempFile | python $pythonScriptPath $OllamaAPIURL 2>&1
-} -ArgumentList $tempFile, $pythonScriptPath, $OllamaAPIURL
-
-# Spinner animation
-$spinner = @('|', '/', '-', '\')
-$spinnerIndex = 0
-
-# Display spinner while job is running
-while ($job.State -eq 'Running') {
-    $elapsedTime = (Get-Date) - $startTime
-    $status = "Processing{0} Elapsed time: {1:mm\:ss}" -f $spinner[$spinnerIndex], $elapsedTime
-    Write-Host "`r$status" -NoNewline
-    $spinnerIndex = ($spinnerIndex + 1) % 4
-    Start-Sleep -Milliseconds 100
-}
-
-# Clear the spinner line
-Write-Host "`r" -NoNewline
-
-# Get the result
-$summary = Receive-Job -Job $job
-Remove-Job -Job $job
-
-$elapsedTime = (Get-Date) - $startTime
-Write-Host "Python script execution completed in $($elapsedTime.TotalSeconds.ToString("F2")) seconds. Cleaning up temporary files..."
-
-# Remove temporary files
+# Remove temporary file
 Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
-Remove-Item -Path $tempFile -ErrorAction SilentlyContinue
 
 if (-not $summary) {
     Write-Host "Failed to generate commit summary." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "Generated commit summary: $summary" -ForegroundColor Green
-
 Write-Host "Committing changes..."
-# Commit changes
-git commit -m "$summary"
+git commit -m $summary
 
 Write-Host "Pushing to origin main..."
-# Push to origin main
 git push origin main
 
-# Print success message
 Write-Host "Changes committed and pushed with summary: $summary" -ForegroundColor Green

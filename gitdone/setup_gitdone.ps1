@@ -4,7 +4,7 @@ $CurrentDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 # Variables
 $ScriptPath = Join-Path $CurrentDir "gitdone.ps1"
 $OllamaAPIURL = "http://localhost:11434"
-$ModelName = "llama2"
+$ModelName = "tinyllama"
 
 # Ensure the gitdone.ps1 script exists in the current directory
 if (!(Test-Path $ScriptPath)) {
@@ -35,6 +35,18 @@ if ($profileContent) {
 $aliasContent = "function gitdone { & `"$ScriptPath`" @args }"
 Add-Content -Path $profilePath -Value $aliasContent
 Write-Host "Function 'gitdone' added to PowerShell profile." -ForegroundColor Cyan
+
+# Ensure Python is installed
+if (!(Get-Command python -ErrorAction SilentlyContinue)) {
+    Write-Host "Python is not installed. Please install Python and run this script again." -ForegroundColor Red
+    exit 1
+}
+
+# Install required Python packages
+Write-Host "Installing required Python packages..." -ForegroundColor Cyan
+python -m pip install --upgrade pip
+pip install ollama tenacity
+Write-Host "Python packages installed successfully." -ForegroundColor Green
 
 # Ensure Ollama is installed and running
 if (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
