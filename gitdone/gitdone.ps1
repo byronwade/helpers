@@ -56,12 +56,32 @@ import json
 import time
 import random
 
-def generate_commit_message(changes, max_retries=3):
-    prompt = f"""Based on the following git changes, create a concise commit message that focuses on the specific code changes made and in what files:
+def generate_commit_message(changes, user_name, max_retries=3):
+    prompt = f"""You are a highly skilled developer and commit message generator. You will generate detailed, structured, and readable commit messages for the provided git diff. Each commit message should:
 
-{changes}
+    1. Begin with the current authorized user's name, in this case: {user_name}.
+    2. Clearly state the files changed.
+    3. Summarize the types of changes made in each file (e.g., added functionality, refactored code, removed redundancy, etc.).
+    4. Provide specific details of the changes (e.g., added authentication, fixed syntax errors, improved comments).
+    5. Ensure the message is concise, professional, and easy to understand.
 
-Commit message:"""
+    Here is the git diff for which I need a commit message:
+
+    {changes}
+
+    Now generate a commit message structured as follows:
+
+    {user_name} made changes in:
+    - [file1]
+      - [brief change description 1]
+      - [brief change description 2]
+      - [brief change description 3]
+    - [file2]
+      - [brief change description 1]
+      - [brief change description 2]
+      - [brief change description 3]
+
+    Ensure the message is structured professionally, with appropriate detail and clarity."""
 
     payload = {
         "model": "llama2",
@@ -74,16 +94,18 @@ Commit message:"""
             start_time = time.time()
             response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=30)
             response.raise_for_status()
-            summary = response.json()['response'].strip().replace('"', '').replace('\n', ' ')
+            summary = response.json().get('response', '').strip().replace('"', '').replace('\n', ' ')
             end_time = time.time()
-            return {"summary": summary, "time": end_time - start_time}
+            if summary:
+                return {"summary": summary, "time": end_time - start_time}
         except Exception as e:
             if attempt == max_retries - 1:
                 return {"error": str(e)}
             time.sleep(random.uniform(1, 3))  # Random delay before retry
 
 changes = sys.stdin.read()
-result = generate_commit_message(changes)
+user_name = "YourUserName"  # Replace with the actual user name
+result = generate_commit_message(changes, user_name)
 print(json.dumps(result))
 "@
 
@@ -115,7 +137,7 @@ if ($result.error) {
 }
 
 Write-Host "Committing changes..."
-git commit -m "$summary"
+git commit -m "$summary" > $null 2>&1
 
 $commitSuccess = $?
 if (-not $commitSuccess) {
@@ -124,7 +146,7 @@ if (-not $commitSuccess) {
 }
 
 Write-Host "Pushing to origin main..."
-git push origin main
+git push origin main > $null 2>&1
 
 $pushSuccess = $?
 if (-not $pushSuccess) {
