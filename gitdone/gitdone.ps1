@@ -45,6 +45,9 @@ if ([string]::IsNullOrEmpty($changes)) {
     exit 0
 }
 
+# Get the Git username
+$userName = git config user.name
+
 Write-Host "Generating commit message..."
 
 # Create a temporary Python script file
@@ -104,7 +107,7 @@ def generate_commit_message(changes, user_name, max_retries=3):
             time.sleep(random.uniform(1, 3))  # Random delay before retry
 
 changes = sys.stdin.read()
-user_name = "YourUserName"  # Replace with the actual user name
+user_name = sys.argv[1]  # Get the username from the command line argument
 result = generate_commit_message(changes, user_name)
 print(json.dumps(result))
 "@
@@ -114,9 +117,9 @@ $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
 # Execute the Python script with a spinner
 $job = Start-Job -ScriptBlock { 
-    param($pythonScriptPath, $changes)
-    $changes | python $pythonScriptPath
-} -ArgumentList $pythonScriptPath, $changes
+    param($pythonScriptPath, $changes, $userName)
+    $changes | python $pythonScriptPath $userName
+} -ArgumentList $pythonScriptPath, $changes, $userName
 
 Show-Spinner -Duration 40  # Increased duration to account for retries
 
@@ -136,22 +139,27 @@ if ($result.error) {
     Write-Host "Generated commit message: $summary"
 }
 
-Write-Host "Committing changes..."
-git commit -m "$summary" > $null 2>&1
+# Ensure the commit message is not empty
+if (-not [string]::IsNullOrWhiteSpace($summary)) {
+    Write-Host "Committing changes..."
+    git commit -m "$summary" > $null 2>&1
 
-$commitSuccess = $?
-if (-not $commitSuccess) {
-    Write-Host "Failed to commit changes. Please check your git configuration." -ForegroundColor Red
-    exit 1
+    $commitSuccess = $?
+    if (-not $commitSuccess) {
+        Write-Host "Failed to commit changes. Please check your git configuration." -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Pushing to origin main..."
+    git push origin main > $null 2>&1
+
+    $pushSuccess = $?
+    if (-not $pushSuccess) {
+        Write-Host "Failed to push changes. Please check your git configuration and remote repository." -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "Changes committed and pushed with summary: $summary" -ForegroundColor Green
+} else {
+    Write-Host "Commit message is empty. Aborting commit." -ForegroundColor Red
 }
-
-Write-Host "Pushing to origin main..."
-git push origin main > $null 2>&1
-
-$pushSuccess = $?
-if (-not $pushSuccess) {
-    Write-Host "Failed to push changes. Please check your git configuration and remote repository." -ForegroundColor Red
-    exit 1
-}
-
-Write-Host "Changes committed and pushed with summary: $summary" -ForegroundColor Green
