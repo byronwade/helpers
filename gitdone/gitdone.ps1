@@ -37,7 +37,7 @@ function Show-Spinner {
 Ensure-OllamaRunning
 
 # Get git diff to summarize
-$changes = git diff --cached --stat
+$changes = git diff --cached
 
 # Check if there are any changes staged
 if ([string]::IsNullOrEmpty($changes)) {
@@ -141,11 +141,12 @@ if (-not [string]::IsNullOrWhiteSpace($summary)) {
     }
 
     Write-Host "Pushing to origin main..."
-    git push origin main > $null 2>&1
-
+    $pushOutput = git push origin main 2>&1
     $pushSuccess = $?
     if (-not $pushSuccess) {
-        Write-Host "Failed to push changes. Please check your git configuration and remote repository." -ForegroundColor Red
+        Write-Host "Failed to push changes. Error details:" -ForegroundColor Red
+        Write-Host $pushOutput -ForegroundColor Red
+        Write-Host "Please check your git configuration and remote repository." -ForegroundColor Red
         exit 1
     }
 
