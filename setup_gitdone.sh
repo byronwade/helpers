@@ -79,3 +79,21 @@ else
 fi
 
 print_color "$GREEN" "Setup complete! Please restart your terminal or run 'source $PROFILE_FILE'."
+
+ensure_ollama() {
+    if ! command -v ollama &>/dev/null; then
+        print_color "$YELLOW" "Ollama not found. Installing Ollama..."
+        curl https://ollama.ai/install.sh | sh
+    fi
+
+    model_name="llama3.1"
+    if ! ollama list | grep -q "$model_name"; then
+        print_color "$BLUE" "Pulling the latest $model_name model..."
+        ollama pull $model_name
+    else
+        print_color "$GREEN" "$model_name model is already available."
+    fi
+
+    print_color "$BLUE" "Starting Ollama service..."
+    ollama serve &
+}

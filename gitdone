@@ -20,6 +20,21 @@ error_exit() {
     exit 1
 }
 
+# Function to ensure Ollama is running
+ensure_ollama_running() {
+    if ! pgrep -f "ollama serve" > /dev/null; then
+        print_color "$YELLOW" "Ollama is not running. Starting Ollama service..."
+        ollama serve &
+        sleep 5  # Wait for Ollama to start
+    fi
+
+    model_name="llama3.1"
+    if ! ollama list | grep -q "$model_name"; then
+        print_color "$YELLOW" "Pulling the latest $model_name model..."
+        ollama pull $model_name
+    fi
+}
+
 # Check for Ollama API URL in environment variables
 if [ -z "$OLLAMA_API_URL" ]; then
     error_exit "Please set the OLLAMA_API_URL environment variable."
@@ -68,8 +83,8 @@ def main():
     print_color("\033[0;34m", "Generating commit message...")
     ollama_api_url = os.getenv("OLLAMA_API_URL")
     payload = {
-        "model": "llama2",
-        "prompt": f"Generate a detailed and specific commit message for the following git diff. The message should clearly describe the changes made, starting with a verb in the imperative mood (e.g., 'Add', 'Fix', 'Update'). Include any relevant details that would help understand the context of the changes:\n\n{changes}",
+        "model": "llama3",
+        "prompt": f"Summarize the following git diff in a concise commit message:\n\n{changes}",
         "stream": False
     }
 
