@@ -37,7 +37,7 @@ function Show-Spinner {
 Ensure-OllamaRunning
 
 # Get git diff to summarize
-$changes = git diff --cached --name-status
+$changes = git diff --cached --stat
 
 # Check if there are any changes staged
 if ([string]::IsNullOrEmpty($changes)) {
@@ -54,19 +54,9 @@ import sys
 import requests
 import json
 import time
-import subprocess
 
-def get_detailed_changes():
-    try:
-        diff_output = subprocess.check_output(['git', 'diff', '--cached', '--stat'], universal_newlines=True)
-        detailed_output = subprocess.check_output(['git', 'diff', '--cached'], universal_newlines=True)
-        return diff_output, detailed_output
-    except subprocess.CalledProcessError:
-        return "", ""
-
-diff_summary, detailed_changes = get_detailed_changes()
-
-prompt = f"Based on the following git changes, write a concise and accurate commit message (max 50 characters, no quotes):\n\nSummary:\n{diff_summary}\n\nDetailed changes:\n{detailed_changes[:500]}...\n\nCommit message:"
+changes = sys.stdin.read()
+prompt = f"Summarize the following git changes in a concise commit message:\n\n{changes}"
 
 payload = {
     "model": "tinyllama",
@@ -76,12 +66,11 @@ payload = {
 
 try:
     start_time = time.time()
-    response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=30)
+    response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=10)
     response.raise_for_status()
-    commit_message = response.json()['response'].strip()
-    commit_message = commit_message[:50].rstrip()
+    summary = response.json()['response'].strip().replace('"', '')
     end_time = time.time()
-    print(json.dumps({"summary": commit_message, "time": end_time - start_time}))
+    print(json.dumps({"summary": summary, "time": end_time - start_time}))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
     sys.exit(1)
@@ -92,11 +81,11 @@ $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
 # Execute the Python script with a spinner
 $job = Start-Job -ScriptBlock { 
-    param($pythonScriptPath)
-    & python $pythonScriptPath
-} -ArgumentList $pythonScriptPath
+    param($pythonScriptPath, $changes)
+    $changes | python $pythonScriptPath
+} -ArgumentList $pythonScriptPath, $changes
 
-Show-Spinner -Duration 30
+Show-Spinner -Duration 10
 
 $result = Receive-Job -Job $job -Wait | ConvertFrom-Json
 Remove-Job -Job $job
