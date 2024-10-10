@@ -75,7 +75,7 @@ print(summary)
 $pythonScript | Out-File -FilePath $pythonScriptPath -Encoding utf8
 
 # Execute the Python script and capture the output
-$summary = Get-Content $tempFile | python -c $pythonScript $OllamaAPIURL 2>&1
+$summary = Get-Content $tempFile | python -c "$pythonScript" $OllamaAPIURL 2>&1
 
 # Remove temporary Python script file
 Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
