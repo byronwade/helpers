@@ -1,0 +1,5 @@
+DEBUG:root:Python script started
+DEBUG:root:Received diff of length: 3776
+DEBUG:root:Sending request to Ollama API
+DEBUG:urllib3.connectionpool:Starting new HTTP connection (1): localhost:11434
+ERROR:root:Request to Ollama API timed out

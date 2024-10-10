@@ -28,7 +28,7 @@ ensure_ollama_running() {
         sleep 5  # Wait for Ollama to start
     fi
 
-    model_name="codellama:latest"
+    model_name="llama2"
     if ! ollama list | grep -q "$model_name"; then
         print_color "$YELLOW" "Pulling the latest $model_name model..."
         ollama pull $model_name

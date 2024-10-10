@@ -6,15 +6,16 @@ $OllamaAPIURL = if ($env:OLLAMA_API_URL) { $env:OLLAMA_API_URL } else { "http://
 
 # Function to ensure Ollama is running and the model is available
 function Ensure-OllamaRunning {
+    Write-Host "Checking Ollama service..."
     if (!(Get-NetTCPConnection -LocalPort 11434 -ErrorAction SilentlyContinue)) {
         Write-Host "Ollama is not running. Starting Ollama service..."
         Start-Process ollama -ArgumentList "serve" -NoNewWindow
-        Start-Sleep -Seconds 5  # Wait for Ollama to start
+        Start-Sleep -Seconds 10  # Wait for Ollama to start
     } else {
         Write-Host "Ollama service is already running."
     }
 
-    $modelName = "codellama:latest"
+    $modelName = "llama2"
     if (!(ollama list | Select-String $modelName)) {
         Write-Host "Pulling the latest $modelName model..."
         ollama pull $modelName
@@ -60,14 +61,15 @@ diff = sys.stdin.read()
 logging.debug(f"Received diff of length: {len(diff)}")
 
 payload = {
-    "model": "codellama:latest",
+    "model": "llama2",
     "prompt": f"Summarize the following git diff in a concise commit message:\n\n{diff}",
     "stream": False
 }
 
 try:
     logging.debug("Sending request to Ollama API")
-    response = requests.post(sys.argv[1] + "/api/generate", json=payload, timeout=30)
+    response = requests.post(sys.argv[1] + "/api/generate", json=payload, timeout=120)
+    logging.debug(f"Response status code: {response.status_code}")
     response.raise_for_status()
     summary = response.json().get('response', '').strip()
     logging.debug(f"Generated summary: {summary}")
@@ -76,9 +78,13 @@ except requests.exceptions.Timeout:
     logging.error("Request to Ollama API timed out")
     print("Request to Ollama API timed out")
     sys.exit(1)
+except requests.exceptions.RequestException as e:
+    logging.error(f"Request failed: {str(e)}")
+    print(f"Request failed: {str(e)}")
+    sys.exit(1)
 except Exception as e:
-    logging.exception("An error occurred:")
-    print(f"Error occurred: {str(e)}")
+    logging.exception("An unexpected error occurred:")
+    print(f"An unexpected error occurred: {str(e)}")
     sys.exit(1)
 "@
 
