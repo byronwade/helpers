@@ -56,7 +56,11 @@ import json
 import time
 
 changes = sys.stdin.read()
-prompt = f"Summarize the following git changes in a concise commit message:\n\n{changes}"
+prompt = f"""Based on the following git changes, create a concise commit message that focuses on the specific code changes made, not just file statistics. For example, mention API call reductions, code simplifications, or specific feature implementations:
+
+{changes}
+
+Commit message:"""
 
 payload = {
     "model": "tinyllama",
@@ -68,7 +72,7 @@ try:
     start_time = time.time()
     response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=10)
     response.raise_for_status()
-    summary = response.json()['response'].strip().replace('"', '')
+    summary = response.json()['response'].strip().replace('"', '').replace('\n', ' ')
     end_time = time.time()
     print(json.dumps({"summary": summary, "time": end_time - start_time}))
 except Exception as e:
