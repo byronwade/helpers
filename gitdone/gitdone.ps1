@@ -54,30 +54,37 @@ import sys
 import requests
 import json
 import time
+import random
 
-changes = sys.stdin.read()
-prompt = f"""Based on the following git changes, create a concise commit message that focuses on the specific code changes made, not just file statistics. Mention API call reductions, code simplifications, or specific feature implementations:
+def generate_commit_message(changes, max_retries=3):
+    prompt = f"""Based on the following git changes, create a concise commit message that focuses on the specific code changes made and in what files:
 
 {changes}
 
 Commit message:"""
 
-payload = {
-    "model": "llama2",
-    "prompt": prompt,
-    "stream": False
-}
+    payload = {
+        "model": "llama2",
+        "prompt": prompt,
+        "stream": False
+    }
 
-try:
-    start_time = time.time()
-    response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=20)
-    response.raise_for_status()
-    summary = response.json()['response'].strip().replace('"', '').replace('\n', ' ')
-    end_time = time.time()
-    print(json.dumps({"summary": summary, "time": end_time - start_time}))
-except Exception as e:
-    print(json.dumps({"error": str(e)}))
-    sys.exit(1)
+    for attempt in range(max_retries):
+        try:
+            start_time = time.time()
+            response = requests.post("$OllamaAPIURL/api/generate", json=payload, timeout=30)
+            response.raise_for_status()
+            summary = response.json()['response'].strip().replace('"', '').replace('\n', ' ')
+            end_time = time.time()
+            return {"summary": summary, "time": end_time - start_time}
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return {"error": str(e)}
+            time.sleep(random.uniform(1, 3))  # Random delay before retry
+
+changes = sys.stdin.read()
+result = generate_commit_message(changes)
+print(json.dumps(result))
 "@
 
 # Write the Python script to the temporary file
@@ -89,7 +96,7 @@ $job = Start-Job -ScriptBlock {
     $changes | python $pythonScriptPath
 } -ArgumentList $pythonScriptPath, $changes
 
-Show-Spinner -Duration 20
+Show-Spinner -Duration 40  # Increased duration to account for retries
 
 $result = Receive-Job -Job $job -Wait | ConvertFrom-Json
 Remove-Job -Job $job
@@ -99,14 +106,13 @@ Remove-Item -Path $pythonScriptPath -ErrorAction SilentlyContinue
 
 if ($result.error) {
     Write-Host "Failed to generate commit summary: $($result.error)" -ForegroundColor Red
-    exit 1
+    $summary = Read-Host "Please enter a commit message manually"
+} else {
+    $summary = $result.summary
+    $processingTime = [math]::Round($result.time, 2)
+    Write-Host "Commit message generated in $processingTime seconds."
+    Write-Host "Generated commit message: $summary"
 }
-
-$summary = $result.summary
-$processingTime = [math]::Round($result.time, 2)
-
-Write-Host "Commit message generated in $processingTime seconds."
-Write-Host "Generated commit message: $summary"
 
 Write-Host "Committing changes..."
 git commit -m "$summary"
