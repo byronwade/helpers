@@ -79,7 +79,7 @@ ensure_ollama() {
         curl https://ollama.ai/install.sh | sh
     fi
 
-    model_name="llama3.1"
+    model_name="codellama:latest"
     if ! ollama list | grep -q "$model_name"; then
         print_color "$BLUE" "Pulling the latest $model_name model..."
         ollama pull $model_name

@@ -14,7 +14,7 @@ function Ensure-OllamaRunning {
         Write-Host "Ollama service is already running."
     }
 
-    $modelName = "llama3.1"
+    $modelName = "codellama:latest"
     if (!(ollama list | Select-String $modelName)) {
         Write-Host "Pulling the latest $modelName model..."
         ollama pull $modelName
@@ -60,7 +60,7 @@ diff = sys.stdin.read()
 logging.debug(f"Received diff of length: {len(diff)}")
 
 payload = {
-    "model": "llama3.1",
+    "model": "codellama:latest",
     "prompt": f"Summarize the following git diff in a concise commit message:\n\n{diff}",
     "stream": False
 }
