@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -20,14 +18,11 @@ var (
 	info    = color.New(color.FgCyan).PrintfFunc()
 	success = color.New(color.FgGreen).PrintfFunc()
 	warn    = color.New(color.FgYellow).PrintfFunc()
-	_err     = color.New(color.FgRed).PrintfFunc()
 	errorLog = color.New(color.FgRed).PrintfFunc()
-	debug   = log.New(os.Stdout, "DEBUG: ", log.Ldate|log.Ltime|log.Lshortfile)
 )
 
 // Run a shell command and return the output
 func runCommand(name string, args ...string) (string, error) {
-	debug.Printf("Running command: %s %v", name, args)
 	cmd := exec.Command(name, args...)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
@@ -37,7 +32,6 @@ func runCommand(name string, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error running command: %v\nStderr: %s", err, stderr.String())
 	}
-	debug.Printf("Command output: %s", out.String())
 	return out.String(), nil
 }
 
@@ -59,7 +53,6 @@ func getGitDiff() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	debug.Printf("Git diff: %s", diff)
 	return diff, nil
 }
 
@@ -79,25 +72,20 @@ func generateCommitMessage(diff string) (string, error) {
 		return "", fmt.Errorf("error marshaling request body: %v", err)
 	}
 
-	debug.Printf("Sending request to Ollama API: %s", string(jsonBody))
 	resp, err := http.Post(apiUrl, "application/json", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("error making request to Ollama API: %v", err)
 	}
 	defer resp.Body.Close()
 
-	debug.Printf("Ollama API response status: %s", resp.Status)
-
 	var fullResponse strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		debug.Printf("Raw response line: %s", line)
 
 		var ollamaResp map[string]interface{}
 		err := json.Unmarshal([]byte(line), &ollamaResp)
 		if err != nil {
-			debug.Printf("Error parsing line: %v", err)
 			continue
 		}
 
@@ -184,10 +172,6 @@ func showLoadingIndicator(done chan bool) {
 func main() {
 	info("Starting gitdone...\n")
 
-	debug.Printf("Current working directory: %s", getCurrentDir())
-	debug.Printf("Git version: %s", getGitVersion())
-	debug.Printf("Go version: %s", getGoVersion())
-
 	done := make(chan bool)
 	go showLoadingIndicator(done)
 
@@ -233,36 +217,4 @@ func main() {
 
 	done <- true
 	success("\ngitdone completed successfully.\n")
-}
-
-func getCurrentDir() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return fmt.Sprintf("Error getting current directory: %v", err)
-	}
-	return dir
-}
-
-func getGitVersion() string {
-	version, err := runCommand("git", "--version")
-	if err != nil {
-		return fmt.Sprintf("Error getting Git version: %v", err)
-	}
-	return strings.TrimSpace(version)
-}
-
-func getGoVersion() string {
-	version, err := runCommand("go", "version")
-	if err != nil {
-		return fmt.Sprintf("Error getting Go version: %v", err)
-	}
-	return strings.TrimSpace(version)
-}
-
-func err(msg string) {
-	fmt.Println("Error:", msg)
-}
-
-func init() {
-	err("This is an error message")
 }
