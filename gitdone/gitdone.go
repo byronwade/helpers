@@ -172,7 +172,7 @@ func generateCommitMessage(changeSummary string) (string, error) {
 - **Do not enclose the commit message in quotes or any other characters.**
 - **Only output the commit message itself, nothing else.**
 
-Limit the message to 72 characters per line and 1-2 sentences.
+Limit the message to 1-2 sentences.
 
 Changes to summarize:
 %s`, changeSummary)
