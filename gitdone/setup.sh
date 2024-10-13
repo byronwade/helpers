@@ -1,71 +1,73 @@
 #!/bin/bash
 
+set -e
+
+# Color output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() { echo -e "${YELLOW}INFO: $1${NC}"; }
+log_success() { echo -e "${GREEN}SUCCESS: $1${NC}"; }
+log_error() { echo -e "${RED}ERROR: $1${NC}"; exit 1; }
+
 # Detect OS
 OS="$(uname -s)"
+log_info "Detected OS: $OS"
 
-# Install Go
-if ! [ -x "$(command -v go)" ]; then
-  echo "Go is not installed. Installing Go..."
-  
-  if [[ "$OS" == "Linux" ]]; then
-    curl -OL https://golang.org/dl/go1.18.4.linux-amd64.tar.gz
-    sudo tar -C /usr/local -xzf go1.18.4.linux-amd64.tar.gz
-    echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-    source ~/.bashrc
-  elif [[ "$OS" == "Darwin" ]]; then
-    # macOS installation via Homebrew
-    if ! [ -x "$(command -v brew)" ]; then
-      echo "Homebrew not found. Installing Homebrew..."
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-      echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-      eval "$(/opt/homebrew/bin/brew shellenv)"
-    fi
-    brew install go
-  fi
-else
-  echo "Go is already installed."
+# Check Go installation
+if ! command -v go &> /dev/null; then
+    log_error "Go is not installed. Please install Go and try again."
 fi
+
+log_success "Go is installed."
 
 # Remove any old gitdone setup
 if [ -f "/usr/local/bin/gitdone" ]; then
-  echo "Removing old gitdone binary..."
-  sudo rm /usr/local/bin/gitdone
+    log_info "Removing old gitdone binary..."
+    sudo rm /usr/local/bin/gitdone || log_error "Failed to remove old gitdone binary."
 fi
 
 # Create the project directory if it doesn't exist
-mkdir -p ~/gitdone
-cd ~/gitdone
+mkdir -p ~/gitdone || log_error "Failed to create ~/gitdone directory."
+cd ~/gitdone || log_error "Failed to change to ~/gitdone directory."
 
 # Initialize a new Go module for the project
 if [ -f "go.mod" ]; then
-  echo "Removing old go.mod and go.sum files..."
-  rm go.mod go.sum 2>/dev/null
+    log_info "Removing old go.mod and go.sum files..."
+    rm go.mod go.sum 2>/dev/null
 fi
 
-go mod init gitdone
+go mod init gitdone || log_error "Failed to initialize Go module."
 
-# Ensure the gitdone.go file exists in the current directory
+# Install required dependencies
+log_info "Installing dependencies..."
+go get github.com/fatih/color || log_error "Failed to install github.com/fatih/color."
+
+# Ensure the gitdone.go file exists in the parent directory
 if [ ! -f "$OLDPWD/gitdone.go" ]; then
-  echo "Error: gitdone.go file not found in the current directory!"
-  exit 1
+    log_error "gitdone.go file not found in the parent directory!"
 fi
 
 # Build the Go program
-echo "Building the gitdone binary..."
-go build -o gitdone "$OLDPWD/gitdone.go"
+log_info "Building the gitdone binary..."
+go build -o gitdone "$OLDPWD/gitdone.go" || log_error "Failed to build gitdone binary."
 
 # Move the binary to a directory in your PATH
 if [[ "$OS" == "Linux" || "$OS" == "Darwin" ]]; then
-  sudo mv gitdone /usr/local/bin/
-  echo "gitdone installed at /usr/local/bin/"
+    sudo mv gitdone /usr/local/bin/ || log_error "Failed to move gitdone binary to /usr/local/bin/."
+    log_success "gitdone installed at /usr/local/bin/"
+else
+    log_error "Unsupported OS for automatic installation. Please manually move the gitdone binary to a directory in your PATH."
 fi
 
 # Verify installation
 if command -v gitdone >/dev/null 2>&1; then
-  echo "gitdone successfully installed and ready to use."
+    log_success "gitdone successfully installed and ready to use."
 else
-  echo "Error: gitdone installation failed!"
+    log_error "gitdone installation failed!"
 fi
 
-# Provide feedback
-echo "Setup complete. You can now run 'gitdone' from anywhere."
+log_success "Setup complete. You can now run 'gitdone' from anywhere."
