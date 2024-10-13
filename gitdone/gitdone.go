@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,10 +15,18 @@ import (
 )
 
 var (
-	info     = color.New(color.FgCyan).PrintfFunc()
-	success  = color.New(color.FgGreen).PrintfFunc()
-	warn     = color.New(color.FgYellow).PrintfFunc()
-	errorLog = color.New(color.FgRed).PrintfFunc()
+	info     = color.New(color.FgCyan, color.Bold).PrintfFunc()
+	success  = color.New(color.FgHiGreen, color.Bold).PrintfFunc()
+	warn     = color.New(color.FgHiYellow, color.Bold).PrintfFunc()
+	errorLog = color.New(color.FgHiRed, color.Bold).PrintfFunc()
+)
+
+const (
+	ollamaAPIURL = "http://localhost:11434/api/generate"
+	modelName    = "llama2"
+	maxRetries   = 3
+	timeout      = 120 * time.Second // Increased timeout for API calls
+	userTimeout  = 30 * time.Second  // Timeout for user input
 )
 
 // Run a shell command and return the output
@@ -29,19 +38,19 @@ func runCommand(name string, args ...string) (string, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("error running command: %v\nStderr: %s", err, stderr.String())
+		return "", fmt.Errorf("Error running command: %v\nStderr: %s", err, stderr.String())
 	}
 	return out.String(), nil
 }
 
-// Add all changes to staging area
+// Add all changes to the staging area
 func addAllChanges() error {
-	info("Adding all changes to staging area...\n")
+	info("Adding all changes to the staging area...\n")
 	_, err := runCommand("git", "add", ".")
 	if err != nil {
-		return fmt.Errorf("error adding changes: %v", err)
+		return fmt.Errorf("Error adding changes: %v", err)
 	}
-	success("All changes added to staging area\n")
+	success("All changes added to the staging area.\n")
 	return nil
 }
 
@@ -57,67 +66,86 @@ func getGitDiff() (string, error) {
 
 // Call Ollama API with a given prompt
 func callOllamaAPI(prompt string) (string, error) {
-	apiUrl := "http://localhost:11434/api/generate"
-	model := "llama2"
-
-	requestBody := map[string]string{
-		"model":  model,
+	requestBody := map[string]interface{}{
+		"model":  modelName,
 		"prompt": prompt,
 	}
 
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", fmt.Errorf("error marshaling request body: %v", err)
+		return "", fmt.Errorf("Error marshaling request body: %v", err)
 	}
 
-	resp, err := http.Post(apiUrl, "application/json", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return "", fmt.Errorf("error making request to Ollama API: %v", err)
-	}
-	defer resp.Body.Close()
+	var responseText string
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Ollama API returned status code: %d", resp.StatusCode)
-	}
-
-	var fullResponse strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		var ollamaResp map[string]interface{}
-		err := json.Unmarshal([]byte(line), &ollamaResp)
+		req, err := http.NewRequestWithContext(ctx, "POST", ollamaAPIURL, bytes.NewBuffer(jsonBody))
 		if err != nil {
+			return "", fmt.Errorf("Error creating request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			errorLog("Attempt %d: Error making request to Ollama API: %v\n", attempt, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			errorLog("Attempt %d: Ollama API returned status code: %d\n", attempt, resp.StatusCode)
+			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
 
-		if response, ok := ollamaResp["response"].(string); ok {
-			fullResponse.WriteString(response)
+		var fullResponse strings.Builder
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			var ollamaResp map[string]interface{}
+			err := json.Unmarshal([]byte(line), &ollamaResp)
+			if err != nil {
+				continue
+			}
+
+			if response, ok := ollamaResp["response"].(string); ok {
+				fullResponse.WriteString(response)
+			}
+
+			if done, ok := ollamaResp["done"].(bool); ok && done {
+				break
+			}
 		}
 
-		if done, ok := ollamaResp["done"].(bool); ok && done {
+		if err := scanner.Err(); err != nil {
+			errorLog("Attempt %d: Error reading response: %v\n", attempt, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		responseText = strings.TrimSpace(fullResponse.String())
+		if responseText != "" {
 			break
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading response: %v", err)
+	if responseText == "" {
+		return "", fmt.Errorf("Failed to get a valid response from Ollama API after %d attempts", maxRetries)
 	}
 
-	result := strings.TrimSpace(fullResponse.String())
-	result = strings.Trim(result, "\"")
-
-	if len(result) == 0 {
-		return "", fmt.Errorf("generated text is empty")
-	}
-
-	return result, nil
+	return responseText, nil
 }
 
 // Generate commit message using Ollama API
-func generateCommitMessage(diff string) (string, error) {
+func generateCommitMessage(changeSummary string) (string, error) {
 	info("Generating commit message using Ollama API...\n")
-	prompt := fmt.Sprintf("Summarize the following git diff in a single, concise sentence suitable for a commit message:\n\n%s", diff)
+	prompt := fmt.Sprintf(`As a Git expert, write a concise, human-readable commit message summarizing the following changes. Focus on the overall purpose and effect of the changes without including code snippets or detailed technical explanations. Limit the message to two sentences.
+
+%s`, changeSummary)
 	commitMsg, err := callOllamaAPI(prompt)
 	if err != nil {
 		return "", err
@@ -127,20 +155,47 @@ func generateCommitMessage(diff string) (string, error) {
 	commitMsg = strings.Trim(commitMsg, "\"")
 
 	if len(commitMsg) == 0 {
-		return "", fmt.Errorf("generated commit message is empty")
+		return "", fmt.Errorf("Generated commit message is empty")
 	}
 
-	commitMsg = strings.ToUpper(commitMsg[:1]) + commitMsg[1:]
-	if !strings.HasSuffix(commitMsg, ".") {
-		commitMsg += "."
-	}
+	// Ensure the commit message is no longer than 72 characters per line
+	commitMsg = formatCommitMessage(commitMsg)
 
-	if len(commitMsg) > 72 {
-		commitMsg = commitMsg[:69] + "..."
-	}
+	// Truncate to a maximum of 4 lines if necessary
+	commitMsg = truncateLines(commitMsg, 4)
 
-	success("Generated commit message: %s\n", commitMsg)
 	return commitMsg, nil
+}
+
+// Format commit message to 72 characters per line
+func formatCommitMessage(msg string) string {
+	var formattedMsg strings.Builder
+	words := strings.Fields(msg)
+	lineLength := 0
+
+	for _, word := range words {
+		if lineLength+len(word)+1 > 72 {
+			formattedMsg.WriteString("\n")
+			lineLength = 0
+		}
+		if lineLength > 0 {
+			formattedMsg.WriteString(" ")
+			lineLength++
+		}
+		formattedMsg.WriteString(word)
+		lineLength += len(word)
+	}
+
+	return formattedMsg.String()
+}
+
+// Truncate commit message to a maximum number of lines
+func truncateLines(msg string, maxLines int) string {
+	lines := strings.Split(msg, "\n")
+	if len(lines) > maxLines {
+		return strings.Join(lines[:maxLines], "\n") + "\n..."
+	}
+	return msg
 }
 
 // Automate git commit and push
@@ -149,34 +204,35 @@ func gitCommitAndPush(commitMsg string) error {
 
 	status, err := runCommand("git", "status", "--porcelain")
 	if err != nil {
-		return fmt.Errorf("error checking git status: %v", err)
+		return fmt.Errorf("Error checking git status: %v", err)
 	}
 	if status == "" {
-		warn("No changes to commit\n")
+		warn("No changes to commit.\n")
 		return nil
 	}
 
 	_, err = runCommand("git", "commit", "-m", commitMsg)
 	if err != nil {
-		return fmt.Errorf("error committing changes: %v", err)
+		return fmt.Errorf("Error committing changes: %v", err)
 	}
-	success("Committed changes with message: %s\n", commitMsg)
+	success("Committed changes with message:\n%s\n", commitMsg)
 
 	branch, err := runCommand("git", "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return fmt.Errorf("error getting current branch: %v", err)
+		return fmt.Errorf("Error getting current branch: %v", err)
 	}
 	branch = strings.TrimSpace(branch)
 
 	_, err = runCommand("git", "push", "origin", branch)
 	if err != nil {
-		return fmt.Errorf("error pushing changes: %v", err)
+		return fmt.Errorf("Error pushing changes: %v", err)
 	}
 	success("Pushed changes to origin/%s\n", branch)
 
 	return nil
 }
 
+// Show a loading indicator
 func showLoadingIndicator(done chan bool) {
 	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	i := 0
@@ -190,6 +246,30 @@ func showLoadingIndicator(done chan bool) {
 			i = (i + 1) % len(frames)
 			time.Sleep(100 * time.Millisecond)
 		}
+	}
+}
+
+// Read user input with a timeout
+func readUserInput(timeout time.Duration) (string, error) {
+	inputChan := make(chan string)
+	errChan := make(chan error)
+	go func() {
+		var userInput string
+		_, err := fmt.Scanln(&userInput)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		inputChan <- userInput
+	}()
+
+	select {
+	case <-time.After(timeout):
+		return "", fmt.Errorf("Input timed out after %v", timeout)
+	case err := <-errChan:
+		return "", err
+	case input := <-inputChan:
+		return input, nil
 	}
 }
 
@@ -224,38 +304,50 @@ func main() {
 	info("Lines added: %d, Lines deleted: %d\n", addedLines, deletedLines)
 	info("Modified files: %v\n", modifiedFiles)
 
-	// Generate change summary
-	changeSummary, err := generateChangeSummary(diff)
-	if err != nil {
-		errorLog("Error generating change summary: %v\n", err)
-	} else {
-		info("Change summary:\n%s\n", changeSummary)
-	}
+	// Create a change summary to send to the AI
+	changeSummary := fmt.Sprintf("Changes:\n- Modified files: %s\n- Lines added: %d\n- Lines deleted: %d",
+		strings.Join(modifiedFiles, ", "), addedLines, deletedLines)
 
-	commitMsg, err := generateCommitMessage(diff)
-	if err != nil {
+	// Generate commit message
+	commitMsg, commitErr := generateCommitMessage(changeSummary)
+	if commitErr != nil {
 		done <- true
-		errorLog("Error generating commit message: %v\n", err)
-		return
-	}
-
-	err = gitCommitAndPush(commitMsg)
-	if err != nil {
-		done <- true
-		errorLog("Error in git operations: %v\n", err)
+		errorLog("Error generating commit message: %v\n", commitErr)
 		return
 	}
 
 	done <- true
+
+	// User confirmation with timeout
+	success("\nGenerated Commit Message:\n%s\n", commitMsg)
+	fmt.Print("Do you want to proceed with this commit message? (y/n): ")
+	userInput, err := readUserInput(userTimeout)
+	if err != nil {
+		errorLog("\nError reading user input: %v\n", err)
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(userInput)) != "y" {
+		warn("Commit aborted by user.\n")
+		return
+	}
+
+	// Proceed with git commit and push
+	err = gitCommitAndPush(commitMsg)
+	if err != nil {
+		errorLog("Error in git operations: %v\n", err)
+		return
+	}
+
 	success("\ngitdone completed successfully.\n")
 }
 
 // parseDiff extracts metrics from the git diff output
 func parseDiff(diff string) (int, int, []string) {
 	var addedLines, deletedLines int
-	var modifiedFiles []string
-	var currentFile string
+	modifiedFiles := make(map[string]bool)
 	scanner := bufio.NewScanner(strings.NewReader(diff))
+	var currentFile string
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "diff --git ") {
@@ -266,7 +358,7 @@ func parseDiff(diff string) (int, int, []string) {
 				// Remove 'a/' prefix
 				aFile = strings.TrimPrefix(aFile, "a/")
 				currentFile = aFile
-				modifiedFiles = append(modifiedFiles, currentFile)
+				modifiedFiles[currentFile] = true
 			}
 		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			addedLines++
@@ -274,16 +366,9 @@ func parseDiff(diff string) (int, int, []string) {
 			deletedLines++
 		}
 	}
-	return addedLines, deletedLines, modifiedFiles
-}
-
-// generateChangeSummary creates a high-level summary from the diff
-func generateChangeSummary(diff string) (string, error) {
-	info("Generating change summary using Ollama API...\n")
-	prompt := fmt.Sprintf("Provide a high-level summary of the following git diff:\n\n%s", diff)
-	summary, err := callOllamaAPI(prompt)
-	if err != nil {
-		return "", err
+	fileList := make([]string, 0, len(modifiedFiles))
+	for file := range modifiedFiles {
+		fileList = append(fileList, file)
 	}
-	return summary, nil
+	return addedLines, deletedLines, fileList
 }
