@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -9,15 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"bufio"
-
 	"github.com/fatih/color"
 )
 
 var (
-	info    = color.New(color.FgCyan).PrintfFunc()
-	success = color.New(color.FgGreen).PrintfFunc()
-	warn    = color.New(color.FgYellow).PrintfFunc()
+	info     = color.New(color.FgCyan).PrintfFunc()
+	success  = color.New(color.FgGreen).PrintfFunc()
+	warn     = color.New(color.FgYellow).PrintfFunc()
 	errorLog = color.New(color.FgRed).PrintfFunc()
 )
 
@@ -56,15 +55,14 @@ func getGitDiff() (string, error) {
 	return diff, nil
 }
 
-// Generate commit message using Ollama API
-func generateCommitMessage(diff string) (string, error) {
-	info("Generating commit message using Ollama API...\n")
+// Call Ollama API with a given prompt
+func callOllamaAPI(prompt string) (string, error) {
 	apiUrl := "http://localhost:11434/api/generate"
 	model := "llama2"
 
 	requestBody := map[string]string{
 		"model":  model,
-		"prompt": fmt.Sprintf("Summarize the following git diff in a single, concise sentence suitable for a commit message:\n\n%s", diff),
+		"prompt": prompt,
 	}
 
 	jsonBody, err := json.Marshal(requestBody)
@@ -77,6 +75,10 @@ func generateCommitMessage(diff string) (string, error) {
 		return "", fmt.Errorf("error making request to Ollama API: %v", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Ollama API returned status code: %d", resp.StatusCode)
+	}
 
 	var fullResponse strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
@@ -102,20 +104,41 @@ func generateCommitMessage(diff string) (string, error) {
 		return "", fmt.Errorf("error reading response: %v", err)
 	}
 
-	commitMsg := strings.TrimSpace(fullResponse.String())
-	commitMsg = strings.Trim(commitMsg, "\"")
-	
-	if len(commitMsg) > 0 {
-		commitMsg = strings.ToUpper(commitMsg[:1]) + commitMsg[1:]
-		if !strings.HasSuffix(commitMsg, ".") {
-			commitMsg += "."
-		}
+	result := strings.TrimSpace(fullResponse.String())
+	result = strings.Trim(result, "\"")
+
+	if len(result) == 0 {
+		return "", fmt.Errorf("generated text is empty")
 	}
-	
+
+	return result, nil
+}
+
+// Generate commit message using Ollama API
+func generateCommitMessage(diff string) (string, error) {
+	info("Generating commit message using Ollama API...\n")
+	prompt := fmt.Sprintf("Summarize the following git diff in a single, concise sentence suitable for a commit message:\n\n%s", diff)
+	commitMsg, err := callOllamaAPI(prompt)
+	if err != nil {
+		return "", err
+	}
+
+	commitMsg = strings.TrimSpace(commitMsg)
+	commitMsg = strings.Trim(commitMsg, "\"")
+
+	if len(commitMsg) == 0 {
+		return "", fmt.Errorf("generated commit message is empty")
+	}
+
+	commitMsg = strings.ToUpper(commitMsg[:1]) + commitMsg[1:]
+	if !strings.HasSuffix(commitMsg, ".") {
+		commitMsg += "."
+	}
+
 	if len(commitMsg) > 72 {
 		commitMsg = commitMsg[:69] + "..."
 	}
-	
+
 	success("Generated commit message: %s\n", commitMsg)
 	return commitMsg, nil
 }
@@ -160,6 +183,7 @@ func showLoadingIndicator(done chan bool) {
 	for {
 		select {
 		case <-done:
+			fmt.Print("\r")
 			return
 		default:
 			fmt.Printf("\r%s Working...", frames[i])
@@ -195,16 +219,23 @@ func main() {
 		return
 	}
 
+	// Parse the diff to get added/deleted lines and modified files
+	addedLines, deletedLines, modifiedFiles := parseDiff(diff)
+	info("Lines added: %d, Lines deleted: %d\n", addedLines, deletedLines)
+	info("Modified files: %v\n", modifiedFiles)
+
+	// Generate change summary
+	changeSummary, err := generateChangeSummary(diff)
+	if err != nil {
+		errorLog("Error generating change summary: %v\n", err)
+	} else {
+		info("Change summary:\n%s\n", changeSummary)
+	}
+
 	commitMsg, err := generateCommitMessage(diff)
 	if err != nil {
 		done <- true
 		errorLog("Error generating commit message: %v\n", err)
-		return
-	}
-
-	if commitMsg == "" {
-		done <- true
-		errorLog("Generated commit message is empty\n")
 		return
 	}
 
@@ -217,4 +248,42 @@ func main() {
 
 	done <- true
 	success("\ngitdone completed successfully.\n")
+}
+
+// parseDiff extracts metrics from the git diff output
+func parseDiff(diff string) (int, int, []string) {
+	var addedLines, deletedLines int
+	var modifiedFiles []string
+	var currentFile string
+	scanner := bufio.NewScanner(strings.NewReader(diff))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "diff --git ") {
+			// Extract file name
+			parts := strings.Split(line, " ")
+			if len(parts) >= 4 {
+				aFile := parts[2]
+				// Remove 'a/' prefix
+				aFile = strings.TrimPrefix(aFile, "a/")
+				currentFile = aFile
+				modifiedFiles = append(modifiedFiles, currentFile)
+			}
+		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			addedLines++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			deletedLines++
+		}
+	}
+	return addedLines, deletedLines, modifiedFiles
+}
+
+// generateChangeSummary creates a high-level summary from the diff
+func generateChangeSummary(diff string) (string, error) {
+	info("Generating change summary using Ollama API...\n")
+	prompt := fmt.Sprintf("Provide a high-level summary of the following git diff:\n\n%s", diff)
+	summary, err := callOllamaAPI(prompt)
+	if err != nil {
+		return "", err
+	}
+	return summary, nil
 }
