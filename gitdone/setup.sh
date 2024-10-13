@@ -17,51 +17,107 @@ log_error() { echo -e "${RED}ERROR: $1${NC}"; exit 1; }
 OS="$(uname -s)"
 log_info "Detected OS: $OS"
 
+# Check OS compatibility
+if [[ "$OS" != "Linux" && "$OS" != "Darwin" ]]; then
+    log_error "Unsupported OS. This script supports Linux and macOS."
+fi
+
 # Check Go installation
 if ! command -v go &> /dev/null; then
     log_error "Go is not installed. Please install Go and try again."
 fi
 
-log_success "Go is installed."
+GO_VERSION=$(go version | awk '{print $3}')
+MIN_GO_VERSION="go1.16"
 
-# Remove any old gitdone setup
-if [ -f "/usr/local/bin/gitdone" ]; then
-    log_info "Removing old gitdone binary..."
-    sudo rm /usr/local/bin/gitdone || log_error "Failed to remove old gitdone binary."
+# Function to compare Go versions
+version_greater_equal() {
+    [ "$(printf '%s\n' "$MIN_GO_VERSION" "$GO_VERSION" | sort -V | head -n1)" = "$MIN_GO_VERSION" ]
+}
+
+if ! version_greater_equal; then
+    log_error "Go version $MIN_GO_VERSION or higher is required. Installed version is $GO_VERSION."
 fi
 
-# Create the project directory if it doesn't exist
-mkdir -p ~/gitdone || log_error "Failed to create ~/gitdone directory."
-cd ~/gitdone || log_error "Failed to change to ~/gitdone directory."
+log_success "Go is installed (version $GO_VERSION)."
 
-# Initialize a new Go module for the project
-if [ -f "go.mod" ]; then
-    log_info "Removing old go.mod and go.sum files..."
-    rm go.mod go.sum 2>/dev/null
+# Determine script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+log_info "Script directory: $SCRIPT_DIR"
+
+# Ensure the gitdone.go file exists in the script directory
+if [ ! -f "$SCRIPT_DIR/gitdone.go" ]; then
+    log_error "gitdone.go file not found in the script directory ($SCRIPT_DIR)!"
 fi
 
-go mod init gitdone || log_error "Failed to initialize Go module."
-
-# Install required dependencies
-log_info "Installing dependencies..."
-go get github.com/fatih/color || log_error "Failed to install github.com/fatih/color."
-
-# Ensure the gitdone.go file exists in the parent directory
-if [ ! -f "$OLDPWD/gitdone.go" ]; then
-    log_error "gitdone.go file not found in the parent directory!"
+# Initialize a new Go module if needed
+cd "$SCRIPT_DIR" || log_error "Failed to change to script directory."
+if [ ! -f "go.mod" ]; then
+    log_info "Initializing Go module..."
+    go mod init gitdone || log_error "Failed to initialize Go module."
+else
+    log_info "Go module already initialized."
 fi
+
+# Install dependencies
+log_info "Ensuring dependencies are up to date..."
+go mod tidy || log_error "Failed to tidy Go module."
 
 # Build the Go program
 log_info "Building the gitdone binary..."
-go build -o gitdone "$OLDPWD/gitdone.go" || log_error "Failed to build gitdone binary."
+go build -o gitdone "$SCRIPT_DIR/gitdone.go" || log_error "Failed to build gitdone binary."
 
-# Move the binary to a directory in your PATH
-if [[ "$OS" == "Linux" || "$OS" == "Darwin" ]]; then
-    sudo mv gitdone /usr/local/bin/ || log_error "Failed to move gitdone binary to /usr/local/bin/."
-    log_success "gitdone installed at /usr/local/bin/"
-else
-    log_error "Unsupported OS for automatic installation. Please manually move the gitdone binary to a directory in your PATH."
+# Find a writable directory in PATH
+log_info "Searching for a writable directory in PATH..."
+
+IFS=':' read -ra ADDR <<< "$PATH"
+INSTALL_DIR=""
+for dir in "${ADDR[@]}"; do
+    if [ -d "$dir" ] && [ -w "$dir" ]; then
+        INSTALL_DIR="$dir"
+        break
+    fi
+done
+
+if [ -z "$INSTALL_DIR" ]; then
+    # Create a local bin directory and add it to PATH
+    INSTALL_DIR="$HOME/.local/bin"
+    mkdir -p "$INSTALL_DIR" || log_error "Failed to create $INSTALL_DIR."
+    log_info "No writable directory in PATH found. Created $INSTALL_DIR."
+
+    # Update PATH in current session
+    export PATH="$PATH:$INSTALL_DIR"
+
+    # Update PATH in shell profile
+    SHELL_PROFILE=""
+    if [ -n "$SHELL" ]; then
+        case "$SHELL" in
+            */bash)
+                if [ -f "$HOME/.bash_profile" ]; then
+                    SHELL_PROFILE="$HOME/.bash_profile"
+                elif [ -f "$HOME/.bashrc" ]; then
+                    SHELL_PROFILE="$HOME/.bashrc"
+                else
+                    SHELL_PROFILE="$HOME/.profile"
+                fi
+                ;;
+            */zsh)
+                SHELL_PROFILE="$HOME/.zshrc"
+                ;;
+            *)
+                SHELL_PROFILE="$HOME/.profile"
+                ;;
+        esac
+    else
+        SHELL_PROFILE="$HOME/.profile"
+    fi
+    log_info "Adding $INSTALL_DIR to PATH in $SHELL_PROFILE..."
+    echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$SHELL_PROFILE"
 fi
+
+# Install the binary
+log_info "Installing gitdone binary to $INSTALL_DIR..."
+mv gitdone "$INSTALL_DIR/" || log_error "Failed to move gitdone binary to $INSTALL_DIR/."
 
 # Verify installation
 if command -v gitdone >/dev/null 2>&1; then
