@@ -330,19 +330,6 @@ func main() {
 
     done <- true
 
-    // User confirmation with timeout
-    success("\nGenerated Commit Message:\n%s\n", commitMsg)
-    fmt.Print("Do you want to proceed with this commit message? (y/n): ")
-    userInput, err := readUserInput(userTimeout)
-    if err != nil {
-        errorLog("\nError reading user input: %v\n", err)
-        return
-    }
-    if strings.ToLower(strings.TrimSpace(userInput)) != "y" {
-        warn("Commit aborted by user.\n")
-        return
-    }
-
     // Proceed with git commit and push
     err = gitCommitAndPush(commitMsg)
     if err != nil {
