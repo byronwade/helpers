@@ -24,9 +24,6 @@ function Ensure-Admin {
 # Start script execution
 Write-Color "Starting gitdone setup..." Yellow
 
-# Ensure script is running as Administrator
-Ensure-Admin
-
 # Check if Go is installed
 $goPath = Get-Command go -ErrorAction SilentlyContinue
 if (-not $goPath) {
@@ -35,20 +32,29 @@ if (-not $goPath) {
     # Download the latest Go MSI installer
     try {
         $goDownloadPage = Invoke-WebRequest -Uri "https://golang.org/dl/" -UseBasicParsing
-        $goDownloadLink = ($goDownloadPage.Content | Select-String -Pattern 'https://go.dev/dl/go[0-9.]+.windows-amd64.msi' -AllMatches).Matches[0].Value
+        $goDownloadLink = ($goDownloadPage.Links | Where-Object {$_.href -like "*.windows-amd64.msi"} | Select-Object -First 1).href
 
         if (-not $goDownloadLink) {
             Handle-Error "Failed to find the Go download link."
         }
 
+        # Ensure the download link is absolute
+        if (-not $goDownloadLink.StartsWith("http")) {
+            $goDownloadLink = "https://golang.org$goDownloadLink"
+        }
+
         # Download the MSI installer
         $goMsi = "$env:TEMP\go_latest.msi"
-        Write-Color "Downloading Go installer..." Yellow
+        Write-Color "Downloading Go installer from $goDownloadLink..." Yellow
         Invoke-WebRequest -Uri $goDownloadLink -OutFile $goMsi -UseBasicParsing
 
         # Install Go silently
         Write-Color "Installing Go..." Yellow
-        Start-Process msiexec.exe -ArgumentList "/i `"$goMsi`" /qn /norestart" -Wait -NoNewWindow
+        $installProcess = Start-Process msiexec.exe -ArgumentList "/i `"$goMsi`" /qn /norestart" -Wait -NoNewWindow -PassThru
+
+        if ($installProcess.ExitCode -ne 0) {
+            Handle-Error "Go installation failed with exit code: $($installProcess.ExitCode)"
+        }
 
         # Remove the installer
         Remove-Item $goMsi -Force
@@ -60,7 +66,7 @@ if (-not $goPath) {
 
         Write-Color "Go has been installed." Green
     } catch {
-        Handle-Error "Failed to install Go: $_"
+        Handle-Error "Failed to install Go: $_`nStack Trace: $($_.ScriptStackTrace)"
     }
 } else {
     Write-Color "Go is already installed." Green
