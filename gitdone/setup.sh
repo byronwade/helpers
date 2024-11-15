@@ -127,3 +127,14 @@ else
 fi
 
 log_success "Setup complete. You can now run 'gitdone' from anywhere."
+
+# Add to the beginning of the script
+check_git_installation() {
+    if ! command -v git &> /dev/null; then
+        log_error "Git is not installed. Please install Git and try again."
+    fi
+    log_success "Git is installed ($(git --version))"
+}
+
+# Add after OS detection
+check_git_installation

@@ -6,9 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -28,15 +32,27 @@ const (
     maxRetries   = 3
     timeout      = 120 * time.Second // Increased timeout for API calls
     userTimeout  = 30 * time.Second  // Timeout for user input
+    maxConcurrentOperations = 4
 )
 
 // Run a shell command and return the output
 func runCommand(name string, args ...string) (string, error) {
+    if runtime.GOOS == "windows" {
+        // Handle Git paths on Windows
+        if name == "git" {
+            name = findGitExecutable()
+        }
+    }
+
     cmd := exec.Command(name, args...)
     var out bytes.Buffer
     var stderr bytes.Buffer
     cmd.Stdout = &out
     cmd.Stderr = &stderr
+    
+    // Set working directory
+    cmd.Dir, _ = os.Getwd()
+
     err := cmd.Run()
     if err != nil {
         return "", fmt.Errorf("Error running command: %v\nStderr: %s", err, stderr.String())
@@ -70,12 +86,23 @@ func callOllamaAPI(prompt string) (string, error) {
     requestBody := map[string]interface{}{
         "model":       modelName,
         "prompt":      prompt,
-        "temperature": 0.2, // Lower temperature for deterministic output
+        "temperature": 0.2,
+        "stream":      true,
     }
 
     jsonBody, err := json.Marshal(requestBody)
     if err != nil {
         return "", fmt.Errorf("Error marshaling request body: %v", err)
+    }
+
+    // Create a client with custom timeout and keep-alive settings
+    client := &http.Client{
+        Timeout: timeout,
+        Transport: &http.Transport{
+            MaxIdleConns:        100,
+            MaxIdleConnsPerHost: 100,
+            IdleConnTimeout:     90 * time.Second,
+        },
     }
 
     var responseText string
@@ -89,28 +116,38 @@ func callOllamaAPI(prompt string) (string, error) {
         }
         req.Header.Set("Content-Type", "application/json")
 
-        resp, err := http.DefaultClient.Do(req)
+        resp, err := client.Do(req)
         if err != nil {
-            errorLog("Attempt %d: Error making request to Ollama API: %v\n", attempt, err)
-            time.Sleep(time.Duration(attempt) * time.Second)
-            continue
+            if attempt < maxRetries {
+                time.Sleep(time.Duration(attempt) * time.Second)
+                continue
+            }
+            return "", err
         }
         defer resp.Body.Close()
 
         if resp.StatusCode != http.StatusOK {
-            errorLog("Attempt %d: Ollama API returned status code: %d\n", attempt, resp.StatusCode)
-            time.Sleep(time.Duration(attempt) * time.Second)
-            continue
+            if attempt < maxRetries {
+                time.Sleep(time.Duration(attempt) * time.Second)
+                continue
+            }
+            return "", fmt.Errorf("API returned status code: %d", resp.StatusCode)
         }
 
+        reader := bufio.NewReader(resp.Body)
         var fullResponse strings.Builder
-        scanner := bufio.NewScanner(resp.Body)
-        for scanner.Scan() {
-            line := scanner.Text()
+
+        for {
+            line, err := reader.ReadString('\n')
+            if err != nil {
+                if err == io.EOF {
+                    break
+                }
+                return "", fmt.Errorf("Error reading response: %v", err)
+            }
 
             var ollamaResp map[string]interface{}
-            err := json.Unmarshal([]byte(line), &ollamaResp)
-            if err != nil {
+            if err := json.Unmarshal([]byte(line), &ollamaResp); err != nil {
                 continue
             }
 
@@ -123,12 +160,6 @@ func callOllamaAPI(prompt string) (string, error) {
             }
         }
 
-        if err := scanner.Err(); err != nil {
-            errorLog("Attempt %d: Error reading response: %v\n", attempt, err)
-            time.Sleep(time.Duration(attempt) * time.Second)
-            continue
-        }
-
         responseText = strings.TrimSpace(fullResponse.String())
         if responseText != "" {
             break
@@ -136,7 +167,7 @@ func callOllamaAPI(prompt string) (string, error) {
     }
 
     if responseText == "" {
-        return "", fmt.Errorf("Failed to get a valid response from Ollama API after %d attempts", maxRetries)
+        return "", fmt.Errorf("Failed to get a valid response after %d attempts", maxRetries)
     }
 
     return responseText, nil
@@ -291,53 +322,104 @@ func readUserInput(timeout time.Duration) (string, error) {
     }
 }
 
+// Add helper function to find Git executable on Windows
+func findGitExecutable() string {
+    // Common Git installation paths on Windows
+    commonPaths := []string{
+        filepath.Join(os.Getenv("ProgramFiles"), "Git", "cmd", "git.exe"),
+        filepath.Join(os.Getenv("ProgramFiles(x86)"), "Git", "cmd", "git.exe"),
+        filepath.Join(os.Getenv("LocalAppData"), "Programs", "Git", "cmd", "git.exe"),
+    }
+
+    // First check if git is in PATH
+    if path, err := exec.LookPath("git"); err == nil {
+        return path
+    }
+
+    // Check common installation paths
+    for _, path := range commonPaths {
+        if _, err := os.Stat(path); err == nil {
+            return path
+        }
+    }
+
+    // Default to "git" and let the system handle it
+    return "git"
+}
+
+// Add error handling utility
+func handleError(err error, message string) {
+    if err != nil {
+        errorLog("%s: %v\n", message, err)
+        os.Exit(1)
+    }
+}
+
 func main() {
     info("Starting gitdone...\n")
+
+    // Ensure we're in a git repository
+    if _, err := runCommand("git", "rev-parse", "--git-dir"); err != nil {
+        errorLog("Not in a git repository\n")
+        return
+    }
 
     done := make(chan bool)
     go showLoadingIndicator(done)
 
-    err := addAllChanges()
-    if err != nil {
+    // Create error channel for goroutine error handling
+    errChan := make(chan error, 1)
+
+    go func() {
+        if err := addAllChanges(); err != nil {
+            errChan <- err
+            return
+        }
+
+        diff, err := getGitDiff()
+        if err != nil {
+            errChan <- err
+            return
+        }
+
+        if diff == "" {
+            errChan <- fmt.Errorf("no changes to commit")
+            return
+        }
+
+        changeSummary := generateChangeSummary(diff)
+        commitMsg, err := generateCommitMessage(changeSummary)
+        if err != nil {
+            errChan <- err
+            return
+        }
+
+        if err := gitCommitAndPush(commitMsg); err != nil {
+            errChan <- err
+            return
+        }
+
+        errChan <- nil
+    }()
+
+    // Wait for either an error or completion
+    select {
+    case err := <-errChan:
         done <- true
-        errorLog("Error adding changes: %v\n", err)
-        return
-    }
-
-    diff, err := getGitDiff()
-    if err != nil {
+        if err != nil {
+            if err.Error() == "no changes to commit" {
+                warn("No changes to commit.\n")
+            } else {
+                errorLog("Error: %v\n", err)
+            }
+            return
+        }
+        success("\ngitdone completed successfully.\n")
+    case <-time.After(timeout):
         done <- true
-        errorLog("Error getting git diff: %v\n", err)
+        errorLog("Operation timed out\n")
         return
     }
-
-    if diff == "" {
-        done <- true
-        warn("No changes to commit.\n")
-        return
-    }
-
-    // Create a detailed change summary
-    changeSummary := generateChangeSummary(diff)
-
-    // Generate commit message
-    commitMsg, commitErr := generateCommitMessage(changeSummary)
-    if commitErr != nil {
-        done <- true
-        errorLog("Error generating commit message: %v\n", commitErr)
-        return
-    }
-
-    done <- true
-
-    // Proceed with git commit and push
-    err = gitCommitAndPush(commitMsg)
-    if err != nil {
-        errorLog("Error in git operations: %v\n", err)
-        return
-    }
-
-    success("\ngitdone completed successfully.\n")
 }
 
 // Generate a detailed change summary

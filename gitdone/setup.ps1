@@ -9,6 +9,10 @@ function Write-Color($Text, $Color) {
 # Function to handle errors
 function Handle-Error($Message) {
     Write-Color "ERROR: $Message" Red
+    # Create error log file
+    $errorLog = Join-Path $env:TEMP "gitdone_setup_error.log"
+    $Message | Out-File $errorLog -Append
+    Write-Color "Error details written to: $errorLog" Yellow
     exit 1
 }
 
@@ -109,51 +113,146 @@ go mod tidy
 
 # Build the Go program
 Write-Color "Building gitdone.exe..." Yellow
-go build -o gitdone.exe $gitdoneGoPath
+try {
+    go build -o gitdone.exe $gitdoneGoPath
+    if (-not (Test-Path ".\gitdone.exe")) {
+        Handle-Error "Build completed but gitdone.exe not found"
+    }
+    Write-Color "Build completed successfully" Green
+} catch {
+    Handle-Error "Failed to build gitdone.exe: $_"
+}
 
 # Install the binary
 # Choose an installation directory in PATH
-$installDirs = ($env:Path).Split(';')
-$installDir = $null
+$installDir = "$env:USERPROFILE\.local\bin"  # Default to user's local bin
 
-foreach ($dir in $installDirs) {
-    if ([string]::IsNullOrWhiteSpace($dir)) { continue }
-    if (Test-Path $dir -and (Get-Item $dir).Attributes -notmatch "ReadOnly" -and (Get-Item $dir).Attributes -notmatch "Hidden") {
-        try {
-            $testFile = Join-Path $dir "test.txt"
-            New-Item -Path $testFile -ItemType File -Force -ErrorAction Stop | Out-Null
-            Remove-Item $testFile -Force
-            $installDir = $dir
-            break
-        } catch {
-            continue
-        }
+# Create installation directory if it doesn't exist
+if (-not (Test-Path $installDir)) {
+    try {
+        New-Item -Path $installDir -ItemType Directory -Force | Out-Null
+        Write-Color "Created installation directory: $installDir" Green
+    } catch {
+        Handle-Error "Failed to create installation directory: $_"
     }
 }
 
-if (-not $installDir) {
-    # If no suitable directory found, create one
-    $installDir = "$env:USERPROFILE\bin"
-    if (-not (Test-Path $installDir)) {
-        New-Item -Path $installDir -ItemType Directory -Force | Out-Null
+# Ensure directory is in PATH
+$userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+if ($userPath -notlike "*$installDir*") {
+    try {
+        [Environment]::SetEnvironmentVariable(
+            "Path", 
+            "$userPath;$installDir", 
+            [EnvironmentVariableTarget]::User
+        )
+        $env:Path = "$env:Path;$installDir"
+        Write-Color "Added $installDir to PATH." Green
+    } catch {
+        Handle-Error "Failed to update PATH: $_"
     }
-
-    # Add to PATH
-    [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$installDir", [EnvironmentVariableTarget]::User)
-    $env:Path += ";$installDir"
-    Write-Color "Added $installDir to PATH." Yellow
 }
 
 # Move the binary
 Write-Color "Installing gitdone.exe to $installDir..." Yellow
-Move-Item -Path ".\gitdone.exe" -Destination $installDir -Force
+$targetPath = Join-Path $installDir "gitdone.exe"
 
-# Verify installation
-$gitdonePath = Get-Command gitdone -ErrorAction SilentlyContinue
-if (-not $gitdonePath) {
-    Handle-Error "gitdone installation failed."
-} else {
-    Write-Color "gitdone successfully installed at $gitdonePath." Green
+# Remove existing file if it exists
+if (Test-Path $targetPath) {
+    try {
+        Remove-Item $targetPath -Force
+        Write-Color "Removed existing gitdone.exe" Yellow
+    } catch {
+        Handle-Error "Failed to remove existing gitdone.exe: $_"
+    }
 }
 
-Write-Color "Setup complete. You can now run 'gitdone' from anywhere in PowerShell." Green
+try {
+    Move-Item -Path ".\gitdone.exe" -Destination $targetPath -Force -ErrorAction Stop
+    Write-Color "Moved gitdone.exe to $targetPath" Green
+} catch {
+    Handle-Error "Failed to move gitdone.exe to $installDir. Error: $_"
+}
+
+# Create a PowerShell profile if it doesn't exist
+$profileDir = Split-Path $PROFILE
+if (-not (Test-Path $profileDir)) {
+    New-Item -Path $profileDir -ItemType Directory -Force | Out-Null
+}
+if (-not (Test-Path $PROFILE)) {
+    New-Item -Path $PROFILE -ItemType File -Force | Out-Null
+}
+
+# Remove any existing gitdone alias or function from profile
+if (Test-Path $PROFILE) {
+    $profileContent = Get-Content $PROFILE -Raw
+    $profileContent = $profileContent -replace "(?ms)function gitdone.*?}\r?\n?", ""
+    $profileContent = $profileContent -replace "Set-Alias.*gitdone.*\r?\n?", ""
+    Set-Content $PROFILE $profileContent
+}
+
+# Add the installation directory to the current session PATH
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + 
+            [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+# Create a function in PowerShell profile to run gitdone.exe
+$functionContent = @"
+
+# GitDone function
+function Invoke-GitDone {
+    try {
+        & "$targetPath" @args
+    } catch {
+        Write-Error "Error running gitdone: `$_"
+    }
+}
+Set-Alias -Name gitdone -Value Invoke-GitDone
+"@
+
+Add-Content $PROFILE $functionContent
+
+# Verify installation
+$gitdonePath = Get-Command gitdone.exe -ErrorAction SilentlyContinue
+if (-not $gitdonePath) {
+    Write-Color "Installation completed but gitdone.exe not found in PATH." Yellow
+    Write-Color "Installation location: $targetPath" Yellow
+    Write-Color "Please restart your terminal and try again." Yellow
+    Write-Color "If the issue persists, run this command:" Yellow
+    Write-Color "`$env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')" Yellow
+} else {
+    Write-Color "gitdone successfully installed at $($gitdonePath.Source)" Green
+}
+
+# Reload the PowerShell profile
+try {
+    . $PROFILE
+    Write-Color "PowerShell profile reloaded." Green
+} catch {
+    Write-Color "Please restart your PowerShell session to use gitdone." Yellow
+}
+
+Write-Color @"
+Installation complete! To use gitdone:
+1. Close and reopen your PowerShell terminal
+2. Run 'gitdone' from any directory
+"@ Green
+
+# Add Git check at the beginning of the script
+function Test-GitInstallation {
+    try {
+        $gitVersion = git --version
+        if ($gitVersion) {
+            Write-Color "Git version: $gitVersion" Green
+            return $true
+        }
+    } catch {
+        Write-Color "Git is not installed or not in PATH" Yellow
+        return $false
+    }
+    return $false
+}
+
+# Call Git check before proceeding
+if (-not (Test-GitInstallation)) {
+    Handle-Error "Git is required but not found. Please install Git and try again."
+}
