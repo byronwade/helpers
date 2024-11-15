@@ -223,15 +223,26 @@ func cleanCommitMessage(msg string) string {
 // Generate commit message using Ollama API
 func generateCommitMessage(changeSummary string) (string, error) {
     info("Generating commit message using Ollama API...\n")
-    prompt := fmt.Sprintf(`Generate a git commit message for these changes:
-- Use present tense verbs
-- Be specific about what changed
-- Keep it under 72 characters
-- Focus on the what and why
-- Be direct and professional
-- No pleasantries or AI-like responses
+    prompt := fmt.Sprintf(`Analyze these code changes and write a git commit message that:
+1. Starts with a verb in present tense
+2. Describes the technical change made to the code
+3. Is under 72 characters
+4. Only includes what was changed in the code
+5. Format: <verb> <technical component> <specific change>
 
-Changes:
+Example good messages:
+- "Add error handling to file upload function"
+- "Fix SQL query performance in user search"
+- "Update JWT token validation logic"
+- "Refactor authentication middleware"
+
+Example bad messages:
+- "Made some changes to the code"
+- "Updated files"
+- "Fixed a bug"
+- "Improved performance"
+
+Code changes to analyze:
 %s`, changeSummary)
 
     commitMsg, err := callOllamaAPI(prompt)
@@ -449,12 +460,12 @@ func main() {
 func generateChangeSummary(diff string) string {
     var summary strings.Builder
     
-    // Extract file changes and use them in the summary
+    // Extract file changes
     files := extractModifiedFiles(diff)
     if len(files) > 0 {
-        summary.WriteString("Modified files:\n")
+        summary.WriteString("Files changed:\n")
         for _, file := range files {
-            summary.WriteString(fmt.Sprintf("- %s\n", file))
+            summary.WriteString(fmt.Sprintf("* %s\n", file))
         }
         summary.WriteString("\n")
     }
@@ -467,7 +478,6 @@ func generateChangeSummary(diff string) string {
     for scanner.Scan() {
         line := scanner.Text()
         
-        // Track current file being processed
         if strings.HasPrefix(line, "diff --git") {
             parts := strings.Split(line, " ")
             if len(parts) >= 4 {
@@ -477,36 +487,50 @@ func generateChangeSummary(diff string) string {
             continue
         }
         
-        // Collect meaningful changes
+        // Focus on function and structural changes
         if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
-            // Added line
             line = strings.TrimPrefix(line, "+")
-            if len(strings.TrimSpace(line)) > 0 {
-                changes[currentFile] = append(changes[currentFile], fmt.Sprintf("Added: %s", line))
+            line = strings.TrimSpace(line)
+            if line != "" {
+                // Identify important code changes
+                if strings.HasPrefix(line, "func ") ||
+                   strings.HasPrefix(line, "type ") ||
+                   strings.HasPrefix(line, "var ") ||
+                   strings.HasPrefix(line, "const ") ||
+                   strings.Contains(line, "struct") ||
+                   strings.Contains(line, "interface") ||
+                   strings.Contains(line, "return ") ||
+                   strings.Contains(line, "if ") {
+                    changes[currentFile] = append(changes[currentFile], fmt.Sprintf("Added: %s", line))
+                }
             }
         } else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
-            // Removed line
             line = strings.TrimPrefix(line, "-")
-            if len(strings.TrimSpace(line)) > 0 {
-                changes[currentFile] = append(changes[currentFile], fmt.Sprintf("Removed: %s", line))
+            line = strings.TrimSpace(line)
+            if line != "" {
+                // Identify important code changes
+                if strings.HasPrefix(line, "func ") ||
+                   strings.HasPrefix(line, "type ") ||
+                   strings.HasPrefix(line, "var ") ||
+                   strings.HasPrefix(line, "const ") ||
+                   strings.Contains(line, "struct") ||
+                   strings.Contains(line, "interface") ||
+                   strings.Contains(line, "return ") ||
+                   strings.Contains(line, "if ") {
+                    changes[currentFile] = append(changes[currentFile], fmt.Sprintf("Removed: %s", line))
+                }
             }
         }
     }
     
-    // Build the summary
-    summary.WriteString("Code changes:\n")
-    
+    // Build a technical summary
+    summary.WriteString("Technical changes:\n")
     for file, fileChanges := range changes {
-        summary.WriteString(fmt.Sprintf("\nIn %s:\n", file))
-        
-        // Limit the number of changes shown per file to avoid overwhelming the AI
-        maxChangesToShow := 5
-        for i, change := range fileChanges {
-            if i >= maxChangesToShow {
-                summary.WriteString(fmt.Sprintf("... and %d more changes\n", len(fileChanges)-maxChangesToShow))
-                break
+        if len(fileChanges) > 0 {
+            summary.WriteString(fmt.Sprintf("\nIn %s:\n", file))
+            for _, change := range fileChanges {
+                summary.WriteString(fmt.Sprintf("* %s\n", change))
             }
-            summary.WriteString(fmt.Sprintf("- %s\n", change))
         }
     }
     
