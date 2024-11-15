@@ -177,27 +177,22 @@ func callOllamaAPI(prompt string) (string, error) {
 func cleanCommitMessage(msg string) string {
     msg = strings.TrimSpace(msg)
 
-    // Remove AI-like phrases and formalities
+    // Remove any meta-commentary or AI responses
     unwantedPhrases := []string{
         `(?i)here'?s?(?:\sa)?(?:\spossible)?(?:\ssuggested)?`,
-        `(?i)I would suggest`,
-        `(?i)let me know`,
-        `(?i)you can use`,
-        `(?i)hope this helps`,
-        `(?i)please let me know`,
-        `(?i)I recommend`,
-        `(?i)I have`,
-        `(?i)I think`,
-        `(?i)we can`,
-        `(?i)this commit`,
-        `(?i)the commit message`,
-        `(?i)this message`,
+        `(?i)is a(?:n)? (?:potential )?git commit message`,
+        `(?i)meets the requirements`,
+        `(?i)based on the changes`,
+        `(?i)this commit message`,
         `(?i):\s*$`,
         `(?i)^"`,
         `(?i)"$`,
-        `(?i)thanks`,
-        `(?i)hello`,
-        `(?i)hi\s`,
+        `(?i)^'`,
+        `(?i)'$`,
+        `(?i)^the commit message`,
+        `(?i)^commit message`,
+        `(?i)following the guidelines`,
+        `(?i)as requested`,
     }
 
     for _, phrase := range unwantedPhrases {
@@ -209,13 +204,19 @@ func cleanCommitMessage(msg string) string {
     msg = strings.Trim(msg, `"' \n`)
     msg = strings.TrimSpace(msg)
 
-    // Ensure first letter is uppercase
-    if len(msg) > 0 {
-        msg = strings.ToUpper(msg[:1]) + msg[1:]
+    // Ensure first word is past tense if it's not already
+    words := strings.Fields(msg)
+    if len(words) > 0 {
+        firstWord := strings.ToLower(words[0])
+        if !strings.HasSuffix(firstWord, "ed") && 
+           !strings.HasSuffix(firstWord, "d") {
+            words[0] = firstWord + "ed"
+            if strings.HasSuffix(firstWord, "e") {
+                words[0] = firstWord + "d"
+            }
+            msg = strings.Join(words, " ")
+        }
     }
-
-    // Remove any remaining colons at the end
-    msg = strings.TrimRight(msg, ":")
 
     return msg
 }
@@ -223,26 +224,21 @@ func cleanCommitMessage(msg string) string {
 // Generate commit message using Ollama API
 func generateCommitMessage(changeSummary string) (string, error) {
     info("Generating commit message using Ollama API...\n")
-    prompt := fmt.Sprintf(`Analyze these code changes and write a git commit message that:
-1. Starts with a verb in present tense
-2. Describes the technical change made to the code
-3. Is under 72 characters
-4. Only includes what was changed in the code
-5. Format: <verb> <technical component> <specific change>
+    prompt := fmt.Sprintf(`Based on these code changes, write a direct git commit message:
+- Use past tense (Updated, Added, Fixed, etc.)
+- Be specific about what code was changed
+- Keep it under 72 characters
+- Focus on the main technical change
+- No explanations or meta-commentary
+- Just write the commit message directly
 
-Example good messages:
-- "Add error handling to file upload function"
-- "Fix SQL query performance in user search"
-- "Update JWT token validation logic"
-- "Refactor authentication middleware"
+Example format:
+Updated user authentication in login.go
+Added database migration for user table
+Fixed memory leak in image processing
+Refactored API response handling
 
-Example bad messages:
-- "Made some changes to the code"
-- "Updated files"
-- "Fixed a bug"
-- "Improved performance"
-
-Code changes to analyze:
+Changes to analyze:
 %s`, changeSummary)
 
     commitMsg, err := callOllamaAPI(prompt)
