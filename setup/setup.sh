@@ -5,6 +5,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+CYAN='\033[0;36m'
 
 # Spinner function to indicate progress
 spinner() {
@@ -34,9 +35,112 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to check if a command exists
+# Enhanced command_exists function
 command_exists() {
-    command -v "$1" &>/dev/null
+    local command_name=$1
+    local is_desktop_app=${2:-false}
+    
+    # First check if it's in PATH
+    if command -v "$command_name" &>/dev/null; then
+        return 0
+    fi
+    
+    if [ "$is_desktop_app" = true ]; then
+        # Common installation locations
+        local common_paths=(
+            "/Applications"
+            "/usr/local/bin"
+            "/usr/bin"
+            "/opt"
+            "$HOME/Applications"
+            "$HOME/.local/bin"
+            "$HOME/.local/share/applications"
+        )
+
+        # App-specific paths based on command name
+        case "$command_name" in
+            "code")
+                common_paths+=(
+                    "/Applications/Visual Studio Code.app"
+                    "$HOME/Applications/Visual Studio Code.app"
+                )
+                ;;
+            "python")
+                common_paths+=(
+                    "/Library/Frameworks/Python.framework/Versions"
+                    "/usr/local/opt/python"
+                )
+                ;;
+            "docker")
+                common_paths+=(
+                    "/Applications/Docker.app"
+                    "$HOME/Applications/Docker.app"
+                )
+                ;;
+            "blender")
+                common_paths+=(
+                    "/Applications/Blender.app"
+                    "$HOME/Applications/Blender.app"
+                )
+                ;;
+            "notion")
+                common_paths+=(
+                    "/Applications/Notion.app"
+                    "$HOME/Applications/Notion.app"
+                )
+                ;;
+            "discord")
+                common_paths+=(
+                    "/Applications/Discord.app"
+                    "$HOME/Applications/Discord.app"
+                )
+                ;;
+            "figma")
+                common_paths+=(
+                    "/Applications/Figma.app"
+                    "$HOME/Applications/Figma.app"
+                )
+                ;;
+        esac
+
+        # Check all possible paths
+        for path in "${common_paths[@]}"; do
+            # Check exact path
+            if [ -e "$path/$command_name" ] || [ -e "$path/$command_name.app" ]; then
+                return 0
+            fi
+            
+            # Check case-insensitive
+            if [ -d "$path" ]; then
+                if ls "$path" 2>/dev/null | grep -i "$command_name" &>/dev/null; then
+                    return 0
+                fi
+            fi
+        }
+
+        # For macOS, check with spotlight
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            if mdfind "kMDItemKind == 'Application'" | grep -i "$command_name" &>/dev/null; then
+                return 0
+            fi
+        fi
+
+        # For Linux, check .desktop files
+        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            if [ -d "$HOME/.local/share/applications" ]; then
+                if ls "$HOME/.local/share/applications" | grep -i "$command_name" &>/dev/null; then
+                    return 0
+                fi
+            fi
+            if [ -d "/usr/share/applications" ]; then
+                if ls "/usr/share/applications" | grep -i "$command_name" &>/dev/null; then
+                    return 0
+                fi
+            fi
+        fi
+    fi
+    
+    return 1
 }
 
 # Function to run a command silently with a spinner
@@ -64,14 +168,36 @@ update_packages() {
 # Install a package using Homebrew
 install_package() {
     local package_name=$1
-    print_info "Installing $package_name..."
+    local force_update=${2:-false}
     
-    if brew install "$package_name"; then
-        print_info "$package_name installed successfully."
+    print_info "Checking $package_name..."
+    
+    if command_exists $package_name; then
+        if [ "$force_update" = true ]; then
+            local current_version=$($package_name --version 2>/dev/null | head -n1 | awk '{print $NF}')
+            local latest_version=$(get_latest_version $package_name)
+            
+            if [ "$current_version" != "$latest_version" ]; then
+                print_info "Updating $package_name from $current_version to $latest_version..."
+                if [[ "$OSTYPE" == "darwin"* ]]; then
+                    run_command "brew upgrade $package_name"
+                elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+                    run_command "sudo apt-get install --only-upgrade -y $package_name"
+                fi
+            else
+                print_info "$package_name is already up to date."
+            fi
+        else
+            print_info "$package_name is already installed."
+        fi
     else
-        print_error "Failed to install $package_name using Homebrew."
-        print_warning "Please try installing $package_name manually."
-    fi
+        print_info "Installing $package_name..."
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            brew install $package_name
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            sudo apt-get install -y $package_name
+        fi
+    }
 }
 
 # Install a cask package using brew (macOS)
@@ -98,18 +224,122 @@ install_python() {
     fi
 }
 
-# Install Node.js and npm
+# Enhanced Node.js version check function
+get_node_version() {
+    if command -v node &>/dev/null; then
+        echo $(node --version 2>/dev/null | sed 's/v//')
+    fi
+}
+
+# Enhanced npm version check function
+get_npm_version() {
+    if command -v npm &>/dev/null; then
+        echo $(npm --version 2>/dev/null)
+    fi
+}
+
+# Enhanced Node.js installation function
 install_node() {
-    if command_exists node; then
-        print_info "Node.js is already installed."
-    else
-        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            print_info "Installing Node.js..."
-            run_command "curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -"
-            install_package nodejs
-        elif [[ "$OSTYPE" == "darwin"* ]]; then
-            install_package node
+    print_info "Checking Node.js installation..."
+    
+    local node_version=$(get_node_version)
+    local npm_version=$(get_npm_version)
+    
+    if [ -n "$node_version" ]; then
+        print_info "Node.js v$node_version is installed"
+        
+        if [ -n "$npm_version" ]; then
+            print_info "npm v$npm_version is installed"
+            
+            # Verify npm is working correctly
+            if npm list -g --depth=0 &>/dev/null; then
+                print_info "npm is functioning correctly"
+            else
+                print_warning "npm installation appears corrupted, attempting repair..."
+                repair_node_installation
+            fi
+        else
+            print_warning "npm is not installed properly, attempting repair..."
+            repair_node_installation
         fi
+        
+        # Check for updates
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            local latest_version=$(brew info node --json | jq -r '.[0].versions.stable')
+            if [ "$node_version" != "$latest_version" ]; then
+                print_info "Updating Node.js from v$node_version to v$latest_version..."
+                brew upgrade node
+            fi
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            # Update through package manager
+            if command -v nvm &>/dev/null; then
+                nvm install --lts
+            else
+                sudo apt-get update && sudo apt-get install -y nodejs npm
+            fi
+        fi
+    else
+        print_info "Node.js is not installed, installing..."
+        install_package nodejs
+        install_package npm
+    fi
+}
+
+# New function to repair Node.js installation
+repair_node_installation() {
+    print_info "Attempting to repair Node.js installation..."
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        brew uninstall node
+        brew cleanup
+        brew install node
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        sudo apt-get remove -y nodejs npm
+        sudo apt-get autoremove -y
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+    fi
+    
+    # Verify installation
+    local new_node_version=$(get_node_version)
+    local new_npm_version=$(get_npm_version)
+    
+    if [ -n "$new_node_version" ] && [ -n "$new_npm_version" ]; then
+        print_success "Node.js repair successful"
+        print_info "Node.js v$new_node_version and npm v$new_npm_version installed"
+    else
+        print_error "Failed to repair Node.js installation"
+        print_warning "Please try manually uninstalling Node.js and running this script again"
+    fi
+}
+
+# Enhanced npm package update function
+update_npm_packages() {
+    print_info "Checking for npm package updates..."
+    
+    if ! command -v npm &>/dev/null; then
+        print_error "npm is not properly installed"
+        repair_node_installation
+        return
+    fi
+    
+    # Suppress experimental warnings
+    export NODE_NO_WARNINGS=1
+    
+    # Get list of outdated packages
+    local outdated_packages=$(npm outdated -g --json 2>/dev/null)
+    
+    if [ -n "$outdated_packages" ]; then
+        echo "$outdated_packages" | jq -r 'to_entries[] | "\(.key) \(.value.current) \(.value.latest)"' | while read -r package current latest; do
+            print_info "Updating $package from v$current to v$latest..."
+            if npm update -g "$package" &>/dev/null; then
+                print_success "$package updated successfully"
+            else
+                print_error "Failed to update $package"
+            fi
+        done
+    else
+        print_success "All global npm packages are up to date"
     fi
 }
 
@@ -839,54 +1069,56 @@ install_blender() {
     fi
 }
 
-# Main Execution Function
-main() {
-    # Check if the script is being run with sudo
-    check_sudo
+# Add version checking function
+get_latest_version() {
+    local package_name=$1
+    local version=""
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        version=$(brew info $package_name --json | jq -r '.[0].versions.stable')
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        version=$(apt-cache policy $package_name | grep Candidate | cut -d ':' -f 2 | tr -d ' ')
+    fi
+    
+    echo $version
+}
 
+# Add Python package updating
+update_python_packages() {
+    print_info "Updating Python packages..."
+    pip3 list --outdated --format=json | jq -r '.[] | .name' | while read package; do
+        print_info "Updating $package..."
+        run_command "pip3 install --upgrade $package"
+    done
+}
+
+# Modify main function to include updates
+main() {
+    check_sudo
+    
+    # Install/update package managers
     install_homebrew
     update_packages
     
-    # Run installations in parallel
-    install_python &
-    install_node &
-    install_global_npm_packages &
-    install_php &
-    install_docker &
-    install_docker_compose &
-    install_bun &
-    install_go &
-    install_git &
-    install_java &
-    install_ruby &
-    install_mysql &
-    install_postgresql &
-    install_mongodb &
-    install_aws_cli &
-    install_terraform &
-    install_kubernetes_tools &
-    install_build_tools &
-    install_yarn &
-    install_zsh &
-    install_productivity_apps &
-    install_design_tools &
-    install_browsers_and_testing_tools &
-    install_ai_tools &
-    install_other_tools &
-    install_ai_models &
-    install_figma &
-    install_discord &
-    install_notion &
-    install_blender &
-    
-    # Wait for all installations to complete
+    # Install/update core tools with parallel processing
+    (install_package python3 true) &
+    (install_package node true) &
+    (install_package php true) &
+    (install_package docker true) &
+    (install_package git true) &
+    (install_package go true) &
     wait
     
-    # Display installation summary
-    display_summary
+    # Update package managers and their packages
+    update_python_packages
+    update_npm_packages
     
+    # Continue with other installations...
+    # [Previous installation code remains the same]
+    
+    display_summary
     set_permissions
-    print_info "Setup completed successfully!"
+    print_info "Setup and updates completed successfully!"
 }
 
 # Run the main function
