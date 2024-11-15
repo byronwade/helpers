@@ -177,15 +177,30 @@ func callOllamaAPI(prompt string) (string, error) {
 func cleanCommitMessage(msg string) string {
     msg = strings.TrimSpace(msg)
 
-    // Regular expression to remove any unwanted introductory phrases
-    re := regexp.MustCompile(`^(?i)(here's a possible commit message.*?:|here.*?s a commit message.*?:|possible commit message.*?:|commit message.*?:|the commit message is.*?:|")`)
-    msg = re.ReplaceAllString(msg, "")
+    // Remove common unwanted phrases
+    unwantedPhrases := []string{
+        `(?i)here'?s? (?:a )?(?:possible )?commit message.*?:`,
+        `(?i)the commit message (?:should be|is).*?:`,
+        `(?i)this commit`,
+        `(?i)updated the code`,
+        `(?i)improved the code`,
+        `(?i)refactored the code`,
+        `(?i)made changes to`,
+    }
 
-    // Remove leading/trailing quotes and whitespace
-    msg = strings.Trim(msg, "\"' \n")
+    for _, phrase := range unwantedPhrases {
+        re := regexp.MustCompile(phrase)
+        msg = re.ReplaceAllString(msg, "")
+    }
 
-    // Ensure the message is clean
+    // Remove quotes and extra whitespace
+    msg = strings.Trim(msg, `"' \n`)
     msg = strings.TrimSpace(msg)
+
+    // Ensure first letter is uppercase
+    if len(msg) > 0 {
+        msg = strings.ToUpper(msg[:1]) + msg[1:]
+    }
 
     return msg
 }
@@ -193,19 +208,16 @@ func cleanCommitMessage(msg string) string {
 // Generate commit message using Ollama API
 func generateCommitMessage(changeSummary string) (string, error) {
     info("Generating commit message using Ollama API...\n")
-    prompt := fmt.Sprintf(`As a Git expert, generate a concise and specific commit message summarizing the following changes. The commit message should:
+    prompt := fmt.Sprintf(`As a Git expert, analyze these changes and generate a clear, specific commit message that:
 
-- Focus on the overall purpose, effect, and improvements made.
-- Be descriptive about the actual changes.
-- **Do not include any introductory phrases, explanations, or extra text.**
-- **Do not mention the number of lines added or deleted.**
-- **Do not start the message with phrases like "Here's a possible commit message" or "Improved the code by".**
-- **Do not enclose the commit message in quotes or any other characters.**
-- **Only output the commit message itself, nothing else.**
+1. Describes what was actually changed and why
+2. Uses present tense (e.g., "Add" not "Added")
+3. Is specific to the code changes shown
+4. Is between 50-70 characters
+5. Starts with a verb
+6. Does not include phrases like "this commit" or "updated the code"
 
-Limit the message to 1-2 sentences.
-
-Changes to summarize:
+Changes to analyze:
 %s`, changeSummary)
 
     commitMsg, err := callOllamaAPI(prompt)
@@ -219,10 +231,7 @@ Changes to summarize:
         return "", fmt.Errorf("Generated commit message is empty")
     }
 
-    // Format the commit message
-    commitMsg = formatCommitMessage(commitMsg)
-
-    return commitMsg, nil
+    return formatCommitMessage(commitMsg), nil
 }
 
 // Format commit message to 72 characters per line
@@ -425,20 +434,68 @@ func main() {
 // Generate a detailed change summary
 func generateChangeSummary(diff string) string {
     var summary strings.Builder
-
-    summary.WriteString("The code changes involve:\n")
-
-    // Get list of modified files
-    modifiedFiles := extractModifiedFiles(diff)
-    if len(modifiedFiles) > 0 {
-        summary.WriteString("- Modifications to the following files: ")
-        summary.WriteString(strings.Join(modifiedFiles, ", "))
-        summary.WriteString(".\n")
+    
+    // Extract file changes and use them in the summary
+    files := extractModifiedFiles(diff)
+    if len(files) > 0 {
+        summary.WriteString("Modified files:\n")
+        for _, file := range files {
+            summary.WriteString(fmt.Sprintf("- %s\n", file))
+        }
+        summary.WriteString("\n")
     }
-
-    // Add a general description (you can customize this)
-    summary.WriteString("- Improvements to commit message generation logic.\n")
-
+    
+    // Parse the diff for actual changes
+    scanner := bufio.NewScanner(strings.NewReader(diff))
+    var currentFile string
+    changes := make(map[string][]string)
+    
+    for scanner.Scan() {
+        line := scanner.Text()
+        
+        // Track current file being processed
+        if strings.HasPrefix(line, "diff --git") {
+            parts := strings.Split(line, " ")
+            if len(parts) >= 4 {
+                currentFile = strings.TrimPrefix(parts[2], "a/")
+                changes[currentFile] = []string{}
+            }
+            continue
+        }
+        
+        // Collect meaningful changes
+        if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+            // Added line
+            line = strings.TrimPrefix(line, "+")
+            if len(strings.TrimSpace(line)) > 0 {
+                changes[currentFile] = append(changes[currentFile], fmt.Sprintf("Added: %s", line))
+            }
+        } else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+            // Removed line
+            line = strings.TrimPrefix(line, "-")
+            if len(strings.TrimSpace(line)) > 0 {
+                changes[currentFile] = append(changes[currentFile], fmt.Sprintf("Removed: %s", line))
+            }
+        }
+    }
+    
+    // Build the summary
+    summary.WriteString("Code changes:\n")
+    
+    for file, fileChanges := range changes {
+        summary.WriteString(fmt.Sprintf("\nIn %s:\n", file))
+        
+        // Limit the number of changes shown per file to avoid overwhelming the AI
+        maxChangesToShow := 5
+        for i, change := range fileChanges {
+            if i >= maxChangesToShow {
+                summary.WriteString(fmt.Sprintf("... and %d more changes\n", len(fileChanges)-maxChangesToShow))
+                break
+            }
+            summary.WriteString(fmt.Sprintf("- %s\n", change))
+        }
+    }
+    
     return summary.String()
 }
 
