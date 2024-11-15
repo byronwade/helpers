@@ -177,15 +177,27 @@ func callOllamaAPI(prompt string) (string, error) {
 func cleanCommitMessage(msg string) string {
     msg = strings.TrimSpace(msg)
 
-    // Remove common unwanted phrases
+    // Remove AI-like phrases and formalities
     unwantedPhrases := []string{
-        `(?i)here'?s? (?:a )?(?:possible )?commit message.*?:`,
-        `(?i)the commit message (?:should be|is).*?:`,
+        `(?i)here'?s?(?:\sa)?(?:\spossible)?(?:\ssuggested)?`,
+        `(?i)I would suggest`,
+        `(?i)let me know`,
+        `(?i)you can use`,
+        `(?i)hope this helps`,
+        `(?i)please let me know`,
+        `(?i)I recommend`,
+        `(?i)I have`,
+        `(?i)I think`,
+        `(?i)we can`,
         `(?i)this commit`,
-        `(?i)updated the code`,
-        `(?i)improved the code`,
-        `(?i)refactored the code`,
-        `(?i)made changes to`,
+        `(?i)the commit message`,
+        `(?i)this message`,
+        `(?i):\s*$`,
+        `(?i)^"`,
+        `(?i)"$`,
+        `(?i)thanks`,
+        `(?i)hello`,
+        `(?i)hi\s`,
     }
 
     for _, phrase := range unwantedPhrases {
@@ -202,22 +214,24 @@ func cleanCommitMessage(msg string) string {
         msg = strings.ToUpper(msg[:1]) + msg[1:]
     }
 
+    // Remove any remaining colons at the end
+    msg = strings.TrimRight(msg, ":")
+
     return msg
 }
 
 // Generate commit message using Ollama API
 func generateCommitMessage(changeSummary string) (string, error) {
     info("Generating commit message using Ollama API...\n")
-    prompt := fmt.Sprintf(`As a Git expert, analyze these changes and generate a clear, specific commit message that:
+    prompt := fmt.Sprintf(`Generate a git commit message for these changes:
+- Use present tense verbs
+- Be specific about what changed
+- Keep it under 72 characters
+- Focus on the what and why
+- Be direct and professional
+- No pleasantries or AI-like responses
 
-1. Describes what was actually changed and why
-2. Uses present tense (e.g., "Add" not "Added")
-3. Is specific to the code changes shown
-4. Is between 50-70 characters
-5. Starts with a verb
-6. Does not include phrases like "this commit" or "updated the code"
-
-Changes to analyze:
+Changes:
 %s`, changeSummary)
 
     commitMsg, err := callOllamaAPI(prompt)
